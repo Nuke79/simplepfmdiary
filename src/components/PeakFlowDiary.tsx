@@ -49,6 +49,7 @@ import {
   CalendarDays,
   Palette,
   RotateCcw,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -69,7 +70,7 @@ interface AppSettings {
 }
 
 /* ---------- version ---------- */
-const APP_VERSION = "1.2.1";
+const APP_VERSION = "1.2.2";
 
 /* ---------- local storage helpers ---------- */
 const STORAGE_KEYS = {
@@ -580,16 +581,27 @@ export function PeakFlowDiary() {
   const greenMin = round10(settings.personalBest * 0.8);
   const yellowMin = round10(settings.personalBest * 0.5);
 
-  /* --- today's measurements --- */
-  const todayMeasurements = React.useMemo(() => {
-    const todayStr = format(new Date(), "yyyy-MM-dd");
+  /* --- selected-date measurements for checklist --- */
+  const selectedDateMeasurements = React.useMemo(() => {
     return measurements.filter(
-      (m) => format(new Date(m.date), "yyyy-MM-dd") === todayStr
+      (m) => format(new Date(m.date), "yyyy-MM-dd") === selectedDate
     );
-  }, [measurements]);
+  }, [measurements, selectedDate]);
 
-  const todayDone = (p: "morning" | "evening", t: "before" | "after") =>
-    todayMeasurements.some((m) => m.period === p && m.timing === t);
+  const selectedDateDone = (p: "morning" | "evening", t: "before" | "after") =>
+    selectedDateMeasurements.some((m) => m.period === p && m.timing === t);
+
+  const allSelectedDone =
+    selectedDateDone("morning", "before") &&
+    selectedDateDone("morning", "after") &&
+    selectedDateDone("evening", "before") &&
+    selectedDateDone("evening", "after");
+
+  const anySelectedDone =
+    selectedDateDone("morning", "before") ||
+    selectedDateDone("morning", "after") ||
+    selectedDateDone("evening", "before") ||
+    selectedDateDone("evening", "after");
 
   /* --- history list --- */
   const historyList = React.useMemo(() => {
@@ -913,12 +925,20 @@ export function PeakFlowDiary() {
                 </CardContent>
               </Card>
 
-              {/* Today's checklist — moved below input */}
+              {/* Checklist for selected date */}
               <Card className={isDark ? "border-slate-700 bg-slate-800/50" : ""}>
                 <CardHeader className="pb-2">
                   <CardTitle className={`text-sm font-medium flex items-center gap-2 ${isDark ? "text-slate-200" : ""}`}>
-                    <Check className="h-4 w-4 text-emerald-500" />
-                    Сегодня, {format(new Date(), "dd MMMM", { locale: ru })}
+                    {allSelectedDone ? (
+                      <Check className="h-4 w-4 text-emerald-500" />
+                    ) : anySelectedDone ? (
+                      <X className="h-4 w-4 text-red-400" />
+                    ) : (
+                      <div className="h-4 w-4" />
+                    )}
+                    {isToday(parseISO(selectedDate))
+                      ? "Сегодня, " + format(new Date(), "dd MMMM", { locale: ru })
+                      : format(parseISO(selectedDate), "dd MMMM yyyy", { locale: ru })}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
@@ -935,17 +955,17 @@ export function PeakFlowDiary() {
                         key={`${p}-${t}`}
                         className={`flex items-center gap-2 rounded-lg border p-2.5 text-sm transition-colors ${
                           isDark
-                            ? todayDone(p, t)
+                            ? selectedDateDone(p, t)
                               ? "bg-emerald-950/50 border-emerald-800 text-emerald-300"
                               : "bg-slate-800 border-slate-700 text-slate-500"
-                            : todayDone(p, t)
+                            : selectedDateDone(p, t)
                               ? "bg-emerald-50 border-emerald-200 text-emerald-700"
                               : "bg-slate-50 border-slate-200 text-slate-500"
                         } ${period === p && timing === t ? "ring-2 ring-emerald-500 ring-offset-1" : ""}`}
                       >
                         <Icon className="h-4 w-4 shrink-0" />
                         <span className="text-xs font-medium leading-tight">{label}</span>
-                        {todayDone(p, t) && (
+                        {selectedDateDone(p, t) && (
                           <Check className="h-3.5 w-3.5 text-emerald-500 ml-auto shrink-0" />
                         )}
                       </div>
