@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   LineChart,
   Line,
@@ -144,33 +144,32 @@ const chartConfig = {
 
 /* ---------- main component ---------- */
 export default function PeakFlowDiary() {
-  const [measurements, setMeasurements] = useState<Measurement[]>(() => {
-    if (typeof window === "undefined") return [];
-    return loadMeasurements();
-  });
-  const [settings, setSettings] = useState<AppSettings>(() => {
-    if (typeof window === "undefined") return { personalBest: 400 };
-    return loadSettings();
-  });
+  const [mounted, setMounted] = useState(false);
+
+  const [measurements, setMeasurements] = useState<Measurement[]>([]);
+  const [settings, setSettings] = useState<AppSettings>({ personalBest: 400 });
   const [inputValue, setInputValue] = useState("");
-  const [period, setPeriod] = useState<"morning" | "evening">(() => {
-    if (typeof window === "undefined") return "morning";
-    const hour = new Date().getHours();
-    return hour >= 5 && hour < 15 ? "morning" : "evening";
-  });
+  const [period, setPeriod] = useState<"morning" | "evening">("morning");
   const [timing, setTiming] = useState<"before" | "after">("before");
-  const [pbInput, setPbInput] = useState(() => {
-    if (typeof window === "undefined") return "400";
-    return String(loadSettings().personalBest);
-  });
-  const [notificationsEnabled, setNotificationsEnabled] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return loadNotificationsPref();
-  });
+  const [pbInput, setPbInput] = useState("400");
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [reminderTimeout, setReminderTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
   const [editingPB, setEditingPB] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const [chartDays, setChartDays] = useState(14);
+
+  /* --- load data from localStorage once after mount --- */
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time init from browser API (localStorage)
+    setMeasurements(loadMeasurements());
+    const s = loadSettings();
+    setSettings(s);
+    setPbInput(String(s.personalBest));
+    setNotificationsEnabled(loadNotificationsPref());
+    const hour = new Date().getHours();
+    setPeriod(hour >= 5 && hour < 15 ? "morning" : "evening");
+    setMounted(true);
+  }, []);
 
   /* --- add measurement --- */
   const addMeasurement = () => {
@@ -371,6 +370,14 @@ export default function PeakFlowDiary() {
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
       .slice(0, 20);
   }, [measurements]);
+
+  if (!mounted) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 flex items-center justify-center">
+        <Wind className="h-8 w-8 text-emerald-400 animate-pulse" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 flex flex-col">
