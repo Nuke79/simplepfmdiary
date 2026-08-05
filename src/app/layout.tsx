@@ -57,7 +57,17 @@ export default function RootLayout({
             __html: `
               if ('serviceWorker' in navigator) {
                 window.addEventListener('load', () => {
-                  navigator.serviceWorker.register('/simplepfmdiary/sw.js');
+                  const reg = navigator.serviceWorker.register('/simplepfmdiary/sw.js');
+                  reg.then(function(swReg) {
+                    swReg.addEventListener('updatefound', function() {
+                      var newSW = swReg.installing;
+                      newSW.addEventListener('statechange', function() {
+                        if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
+                          window.dispatchEvent(new CustomEvent('sw-update-available'));
+                        }
+                      });
+                    });
+                  });
                 });
               }
             `,

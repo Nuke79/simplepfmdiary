@@ -69,7 +69,7 @@ interface AppSettings {
 }
 
 /* ---------- version ---------- */
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.2.1";
 
 /* ---------- local storage helpers ---------- */
 const STORAGE_KEYS = {
@@ -232,21 +232,19 @@ export function PeakFlowDiary() {
 
   // Auto-update: listen for SW update notification
   useEffect(() => {
-    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    const handler = (event: MessageEvent) => {
-      if (event.data?.type === "SW_UPDATED") {
-        toast.info("Доступна новая версия приложения", {
-          description: "Нажмите для обновления",
-          duration: 15000,
-          action: {
-            label: "Обновить",
-            onClick: () => window.location.reload(),
-          },
-        });
-      }
+    if (typeof window === "undefined") return;
+    const handler = () => {
+      toast.info("Доступна новая версия приложения", {
+        description: "Нажмите для обновления",
+        duration: 15000,
+        action: {
+          label: "Обновить",
+          onClick: () => window.location.reload(),
+        },
+      });
     };
-    navigator.serviceWorker.addEventListener("message", handler);
-    return () => navigator.serviceWorker.removeEventListener("message", handler);
+    window.addEventListener("sw-update-available", handler);
+    return () => window.removeEventListener("sw-update-available", handler);
   }, []);
 
   /* --- add measurement (#1: with custom date/time) --- */

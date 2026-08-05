@@ -1,4 +1,4 @@
-const CACHE_NAME = "peakflow-v3";
+const CACHE_NAME = "peakflow-v4";
 const BASE = "/simplepfmdiary";
 const STATIC_ASSETS = [
   BASE + "/",
@@ -7,29 +7,22 @@ const STATIC_ASSETS = [
   BASE + "/icon-512.png",
 ];
 
-/* Install: cache core assets, activate immediately */
+/* Install: cache core assets, wait for activation */
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS))
   );
-  self.skipWaiting();
+  // Don't skipWaiting — let the old SW serve until user reloads
 });
 
-/* Activate: delete old caches, notify all clients to reload */
+/* Activate: delete old caches, claim all clients */
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(
         keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
       )
-    ).then(() => {
-      // Tell all open tabs/pages to reload
-      return self.clients.matchAll().then((clients) => {
-        clients.forEach((client) => {
-          client.postMessage({ type: "SW_UPDATED", cache: CACHE_NAME });
-        });
-      });
-    })
+    )
   );
   self.clients.claim();
 });
