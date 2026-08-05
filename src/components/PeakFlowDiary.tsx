@@ -70,7 +70,7 @@ interface AppSettings {
 }
 
 /* ---------- version ---------- */
-const APP_VERSION = "1.2.2";
+const APP_VERSION = "1.2.3";
 
 /* ---------- local storage helpers ---------- */
 const STORAGE_KEYS = {
@@ -300,7 +300,8 @@ export function PeakFlowDiary() {
     const timingLabel = timing === "before" ? "до" : "после";
     toast.success(`Записано: ${val} л/мин (${periodLabel}, ${timingLabel} ингаляции)`);
 
-    inputRef.current?.focus();
+    // Dismiss keyboard after recording
+    inputRef.current?.blur();
   };
 
   /* --- delete measurement --- */
