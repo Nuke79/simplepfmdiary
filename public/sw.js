@@ -1,5 +1,11 @@
-const CACHE_NAME = "peakflow-v1";
-const STATIC_ASSETS = ["/", "/manifest.json"];
+const CACHE_NAME = "peakflow-v2";
+const BASE = "/simplepfmdiary";
+const STATIC_ASSETS = [
+  BASE + "/",
+  BASE + "/manifest.json",
+  BASE + "/icon-192.png",
+  BASE + "/icon-512.png",
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -23,7 +29,7 @@ self.addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // API calls go to network (but we don't use API anymore, just in case)
+  // API calls go to network (not used, but just in case)
   if (url.pathname.startsWith("/api/")) {
     return;
   }
@@ -37,7 +43,7 @@ self.addEventListener("fetch", (event) => {
           caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
           return response;
         })
-        .catch(() => caches.match("/"))
+        .catch(() => caches.match(BASE + "/"))
     );
     return;
   }
