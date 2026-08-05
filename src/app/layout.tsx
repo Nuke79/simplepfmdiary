@@ -17,7 +17,7 @@ export const metadata: Metadata = {
   title: "Дневник пикфлоуметрии — Simple PFM Diary",
   description: "Простой дневник пикфлоуметрии для ежедневного контроля пиковой скорости выдоха. PWA, работает офлайн.",
   keywords: ["пикфлоуметрия", "ПСВ", "астма", "дневник", "здоровье", "peak flow", "PFM"],
-  manifest: "/manifest.json",
+  manifest: "/simplepfmdiary/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
