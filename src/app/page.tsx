@@ -288,8 +288,8 @@ export default function PeakFlowDiary() {
     );
 
     const pb = settings.personalBest;
-    const greenMin = Math.round(pb * 0.8);
-    const yellowMin = Math.round(pb * 0.5);
+    const greenMin = round10(pb * 0.8);
+    const yellowMin = round10(pb * 0.5);
 
     const bom = "\uFEFF";
     const header = "Дата;Время;Период;Тип;ПСВ (л/мин);Зона\n";
@@ -557,12 +557,25 @@ export default function PeakFlowDiary() {
                     </Button>
                   </div>
 
-                  {/* Value input */}
-                  <div className="flex gap-2 items-end">
-                    <div className="flex-1">
-                      <label className="text-xs text-muted-foreground mb-1 block">
-                        ПСВ (л/мин)
-                      </label>
+                  {/* Value input with +/- buttons */}
+                  <div className="space-y-2">
+                    <label className="text-xs text-muted-foreground block">
+                      ПСВ (л/мин)
+                    </label>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="outline"
+                        size="lg"
+                        className="h-14 w-14 shrink-0 text-lg font-bold"
+                        onClick={() => {
+                          const cur = parseInt(inputValue) || 0;
+                          const next = Math.max(50, cur - 10);
+                          setInputValue(String(next));
+                        }}
+                        disabled={!inputValue || parseInt(inputValue) <= 50}
+                      >
+                        <Minus className="h-5 w-5" />
+                      </Button>
                       <Input
                         ref={inputRef}
                         type="number"
@@ -575,12 +588,25 @@ export default function PeakFlowDiary() {
                         }}
                         min={50}
                         max={900}
-                        className="text-2xl font-bold h-14 text-center"
+                        className="text-2xl font-bold h-14 text-center flex-1"
                       />
+                      <Button
+                        variant="outline"
+                        size="lg"
+                        className="h-14 w-14 shrink-0 text-lg font-bold"
+                        onClick={() => {
+                          const cur = parseInt(inputValue) || 0;
+                          const next = Math.min(900, cur + 10);
+                          setInputValue(String(next));
+                        }}
+                        disabled={!inputValue || parseInt(inputValue) >= 900}
+                      >
+                        <Plus className="h-5 w-5" />
+                      </Button>
                     </div>
                     <Button
                       size="lg"
-                      className="h-14 px-6 text-base font-semibold bg-emerald-600 hover:bg-emerald-700"
+                      className="w-full h-12 text-base font-semibold bg-emerald-600 hover:bg-emerald-700"
                       onClick={addMeasurement}
                     >
                       <Plus className="h-5 w-5 mr-1" />
