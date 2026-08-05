@@ -38,6 +38,7 @@ import {
   Minus,
   Trash2,
   Upload,
+  Download,
   Settings,
   Activity,
   Wind,
@@ -47,6 +48,7 @@ import {
   Check,
   CalendarDays,
   Palette,
+  RotateCcw,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -67,7 +69,7 @@ interface AppSettings {
 }
 
 /* ---------- version ---------- */
-const APP_VERSION = "1.1.0";
+const APP_VERSION = "1.2.0";
 
 /* ---------- local storage helpers ---------- */
 const STORAGE_KEYS = {
@@ -184,6 +186,8 @@ export function PeakFlowDiary() {
   const [editingPB, setEditingPB] = useState(false);
   const [editingReminder, setEditingReminder] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const settingsRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [chartDays, setChartDays] = useState(14);
 
@@ -225,6 +229,25 @@ export function PeakFlowDiary() {
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
   }, [theme]);
+
+  // Auto-update: listen for SW update notification
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    const handler = (event: MessageEvent) => {
+      if (event.data?.type === "SW_UPDATED") {
+        toast.info("Доступна новая версия приложения", {
+          description: "Нажмите для обновления",
+          duration: 15000,
+          action: {
+            label: "Обновить",
+            onClick: () => window.location.reload(),
+          },
+        });
+      }
+    };
+    navigator.serviceWorker.addEventListener("message", handler);
+    return () => navigator.serviceWorker.removeEventListener("message", handler);
+  }, []);
 
   /* --- add measurement (#1: with custom date/time) --- */
   const addMeasurement = () => {
@@ -412,6 +435,121 @@ export function PeakFlowDiary() {
     toast.success("CSV-файл загружен");
   };
 
+  /* --- CSV import --- */
+  const importCSV = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target?.result as string;
+        // Remove BOM if present
+        const cleaned = text.replace(/^\uFEFF/, "");
+        const lines = cleaned.split("\n").filter((l) => l.trim());
+
+        if (lines.length < 2) {
+          toast.error("Файл пуст или не содержит данных");
+          return;
+        }
+
+        // Skip header row
+        const dataLines = lines.slice(1);
+        const imported: Measurement[] = [];
+
+        for (const line of dataLines) {
+          const parts = line.split(";").map((s) => s.trim());
+          if (parts.length < 5) continue;
+
+          const [dateStr, timeStr, periodStr, timingStr, valueStr] = parts;
+          const value = parseInt(valueStr);
+          if (isNaN(value) || value < 50 || value > 900) continue;
+
+          // Parse date and time (format: DD.MM.YYYY, HH:mm)
+          const period: "morning" | "evening" = periodStr.toLowerCase().startsWith("утр") ? "morning" : "evening";
+          const timing: "before" | "after" = timingStr.toLowerCase().includes("до") ? "before" : "after";
+
+          // Parse DD.MM.YYYY
+          const dateParts = dateStr.split(".");
+          const day = parseInt(dateParts[0]);
+          const month = parseInt(dateParts[1]) - 1;
+          const year = parseInt(dateParts[2]);
+          // Parse HH:mm
+          const timeParts = timeStr.split(":");
+          const hour = parseInt(timeParts[0]);
+          const minute = parseInt(timeParts[1]);
+
+          const date = new Date(year, month, day, hour, minute);
+
+          if (isNaN(date.getTime())) continue;
+
+          imported.push({
+            id: generateId(),
+            value,
+            period,
+            timing,
+            date: date.toISOString(),
+            createdAt: new Date().toISOString(),
+          });
+        }
+
+        if (imported.length === 0) {
+          toast.error("Не удалось прочитать записи из файла");
+          return;
+        }
+
+        // Merge with existing: add imported, skip duplicates by date+period+timing
+        const existing = [...measurements];
+        let added = 0;
+        let skipped = 0;
+
+        for (const m of imported) {
+          const isDupe = existing.some(
+            (e) =>
+              format(new Date(e.date), "yyyy-MM-dd HH:mm") === format(new Date(m.date), "yyyy-MM-dd HH:mm") &&
+              e.period === m.period &&
+              e.timing === m.timing
+          );
+          if (isDupe) {
+            skipped++;
+          } else {
+            existing.push(m);
+            added++;
+          }
+        }
+
+        const merged = existing;
+        setMeasurements(merged);
+        saveMeasurements(merged);
+
+        // Auto-update personal best if any imported value is higher
+        const maxImported = Math.max(...imported.map((m) => m.value));
+        if (maxImported > settings.personalBest) {
+          const newSettings = { ...settings, personalBest: maxImported };
+          setSettings(newSettings);
+          saveSettings(newSettings);
+          setPbInput(String(maxImported));
+        }
+
+        toast.success(`Импортировано: ${added} записей${skipped > 0 ? `, пропущено (дубли): ${skipped}` : ""}`);
+      } catch {
+        toast.error("Ошибка чтения CSV-файла");
+      }
+    };
+    reader.readAsText(file, "utf-8");
+    // Reset input so same file can be re-imported
+    event.target.value = "";
+  };
+
+  /* --- settings button: switch to input tab + scroll --- */
+  const openSettings = () => {
+    setActiveTab("input");
+    setShowSettings(true);
+    setTimeout(() => {
+      settingsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 100);
+  };
+
   /* --- chart data --- */
   const chartData = React.useMemo(() => {
     const days = Array.from({ length: chartDays }, (_, i) => {
@@ -556,7 +694,7 @@ export function PeakFlowDiary() {
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => setShowSettings(!showSettings)}
+              onClick={openSettings}
               className="h-9 w-9"
               title="Настройки"
             >
@@ -827,7 +965,7 @@ export function PeakFlowDiary() {
               </Card>
 
               {/* Zone legend + Settings (collapsed by default) */}
-              <Card className={isDark ? "border-slate-700 bg-slate-800/50" : ""}>
+              <Card ref={settingsRef} className={isDark ? "border-slate-700 bg-slate-800/50" : ""}>
                 <CardHeader className="pb-2">
                   <CardTitle className={`text-sm font-medium flex items-center gap-2 cursor-pointer ${isDark ? "text-slate-200" : ""}`}
                     onClick={() => setShowSettings(!showSettings)}
@@ -936,6 +1074,40 @@ export function PeakFlowDiary() {
                         <span className={`text-xs ${isDark ? "text-slate-500" : ""}`}>(нажмите чтобы изменить)</span>
                       </button>
                     )}
+                  </div>
+
+                  {/* CSV Import/Export */}
+                  <div className={`border-t pt-3 ${isDark ? "border-slate-700" : ""}`}>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="flex-1 gap-1.5 text-xs"
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        Импорт CSV
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="flex-1 gap-1.5 text-xs"
+                        onClick={exportCSV}
+                      >
+                        <Upload className="h-3.5 w-3.5" />
+                        Экспорт CSV
+                      </Button>
+                    </div>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".csv"
+                      className="hidden"
+                      onChange={importCSV}
+                    />
+                    <p className={`text-xs mt-2 ${isDark ? "text-slate-500" : "text-muted-foreground"}`}>
+                      Импорт объединяет данные. Дубли не создаются.
+                    </p>
                   </div>
                 </CardContent>
               </Card>

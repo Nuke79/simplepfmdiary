@@ -1,4 +1,4 @@
-const CACHE_NAME = "peakflow-v2";
+const CACHE_NAME = "peakflow-v3";
 const BASE = "/simplepfmdiary";
 const STATIC_ASSETS = [
   BASE + "/",
@@ -7,6 +7,7 @@ const STATIC_ASSETS = [
   BASE + "/icon-512.png",
 ];
 
+/* Install: cache core assets, activate immediately */
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS))
@@ -14,27 +15,33 @@ self.addEventListener("install", (event) => {
   self.skipWaiting();
 });
 
+/* Activate: delete old caches, notify all clients to reload */
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(
         keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
       )
-    )
+    ).then(() => {
+      // Tell all open tabs/pages to reload
+      return self.clients.matchAll().then((clients) => {
+        clients.forEach((client) => {
+          client.postMessage({ type: "SW_UPDATED", cache: CACHE_NAME });
+        });
+      });
+    })
   );
   self.clients.claim();
 });
 
+/* Fetch: network-first for navigation, cache-first for assets */
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // API calls go to network (not used, but just in case)
-  if (url.pathname.startsWith("/api/")) {
-    return;
-  }
+  if (url.pathname.startsWith("/api/")) return;
 
-  // For navigation requests, try network first, then cache
+  // Navigation: always try network first to get fresh content
   if (request.mode === "navigate") {
     event.respondWith(
       fetch(request)
@@ -48,7 +55,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // For static assets, try cache first, then network
+  // Static assets: cache first, then network
   event.respondWith(
     caches.match(request).then(
       (cached) =>
