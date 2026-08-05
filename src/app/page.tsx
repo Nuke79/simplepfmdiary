@@ -35,6 +35,7 @@ import {
   Sun,
   Moon,
   Plus,
+  Minus,
   Trash2,
   Download,
   Settings,
@@ -110,9 +111,13 @@ function generateId(): string {
 }
 
 /* ---------- zone helpers ---------- */
+function round10(n: number): number {
+  return Math.round(n / 10) * 10;
+}
+
 function getZone(value: number, pb: number): "green" | "yellow" | "red" {
-  if (value >= pb * 0.8) return "green";
-  if (value >= pb * 0.5) return "yellow";
+  if (value >= round10(pb * 0.8)) return "green";
+  if (value >= round10(pb * 0.5)) return "yellow";
   return "red";
 }
 
@@ -168,6 +173,12 @@ export default function PeakFlowDiary() {
     setNotificationsEnabled(loadNotificationsPref());
     const hour = new Date().getHours();
     setPeriod(hour >= 5 && hour < 15 ? "morning" : "evening");
+    // Pre-fill with last measurement value
+    const saved = loadMeasurements();
+    if (saved.length > 0) {
+      const lastVal = saved[saved.length - 1].value;
+      setInputValue(String(lastVal));
+    }
     setMounted(true);
   }, []);
 
@@ -193,7 +204,7 @@ export default function PeakFlowDiary() {
     setMeasurements(updated);
     saveMeasurements(updated);
 
-    setInputValue("");
+    setInputValue(String(val));
 
     // If this is a "before" measurement, switch to "after" and schedule reminder
     if (timing === "before") {
@@ -350,8 +361,8 @@ export default function PeakFlowDiary() {
     return days;
   }, [measurements, chartDays]);
 
-  const greenMin = Math.round(settings.personalBest * 0.8);
-  const yellowMin = Math.round(settings.personalBest * 0.5);
+  const greenMin = round10(settings.personalBest * 0.8);
+  const yellowMin = round10(settings.personalBest * 0.5);
 
   /* --- today's measurements --- */
   const todayMeasurements = React.useMemo(() => {
