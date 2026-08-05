@@ -47,7 +47,7 @@ export default function RootLayout({
   return (
     <html lang="ru" suppressHydrationWarning>
       <head>
-        <link rel="apple-touch-icon" href="/icon-192.png" />
+        <link rel="apple-touch-icon" href="/simplepfmdiary/icon-192.png" />
         <meta name="apple-mobile-web-app-title" content="Дневник ПФМ" />
         <script
           dangerouslySetInnerHTML={{
