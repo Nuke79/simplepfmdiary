@@ -17,7 +17,6 @@ export const metadata: Metadata = {
   title: "Дневник пикфлоуметрии — Simple PFM Diary",
   description: "Простой дневник пикфлоуметрии для ежедневного контроля пиковой скорости выдоха. PWA, работает офлайн.",
   keywords: ["пикфлоуметрия", "ПСВ", "астма", "дневник", "здоровье", "peak flow", "PFM"],
-  manifest: "/simplepfmdiary/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
@@ -47,8 +46,12 @@ export default function RootLayout({
   return (
     <html lang="ru" suppressHydrationWarning>
       <head>
+        {/* PWA manifest — manual link to bypass Next.js basePath bug */}
+        <link rel="manifest" href="/simplepfmdiary/manifest.json" />
         <link rel="apple-touch-icon" href="/simplepfmdiary/icon-192.png" />
         <meta name="apple-mobile-web-app-title" content="Дневник ПФМ" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="theme-color" content="#059669" />
         <script
           dangerouslySetInnerHTML={{
             __html: `
