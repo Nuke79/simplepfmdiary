@@ -1,0 +1,992 @@
+     1→"use client";
+     2→
+     3→import React, { useState, useRef, useEffect } from "react";
+     4→import {
+     5→  LineChart,
+     6→  Line,
+     7→  XAxis,
+     8→  YAxis,
+     9→  CartesianGrid,
+    10→  ReferenceLine,
+    11→  ReferenceArea,
+    12→} from "recharts";
+    13→import { format, subDays, startOfDay } from "date-fns";
+    14→import { ru } from "date-fns/locale";
+    15→import {
+    16→  Card,
+    17→  CardContent,
+    18→  CardHeader,
+    19→  CardTitle,
+    20→  CardDescription,
+    21→} from "@/components/ui/card";
+    22→import { Button } from "@/components/ui/button";
+    23→import { Input } from "@/components/ui/input";
+    24→import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+    25→import { Badge } from "@/components/ui/badge";
+    26→import {
+    27→  ChartContainer,
+    28→  ChartTooltip,
+    29→  ChartTooltipContent,
+    30→  ChartLegend,
+    31→  ChartLegendContent,
+    32→  type ChartConfig,
+    33→} from "@/components/ui/chart";
+    34→import {
+    35→  Sun,
+    36→  Moon,
+    37→  Plus,
+    38→  Minus,
+    39→  Trash2,
+    40→  Download,
+    41→  Settings,
+    42→  Activity,
+    43→  Wind,
+    44→  Bell,
+    45→  BellOff,
+    46→  Clock,
+    47→  Check,
+    48→} from "lucide-react";
+    49→import { toast } from "sonner";
+    50→
+    51→/* ---------- types ---------- */
+    52→interface Measurement {
+    53→  id: string;
+    54→  value: number;
+    55→  period: "morning" | "evening";
+    56→  timing: "before" | "after";
+    57→  date: string; // ISO string
+    58→  createdAt: string;
+    59→}
+    60→
+    61→interface AppSettings {
+    62→  personalBest: number;
+    63→}
+    64→
+    65→/* ---------- local storage helpers ---------- */
+    66→const STORAGE_KEYS = {
+    67→  measurements: "peakflow_measurements",
+    68→  settings: "peakflow_settings",
+    69→  notifications: "peakflow_notifications",
+    70→} as const;
+    71→
+    72→function loadMeasurements(): Measurement[] {
+    73→  if (typeof window === "undefined") return [];
+    74→  try {
+    75→    const raw = localStorage.getItem(STORAGE_KEYS.measurements);
+    76→    return raw ? JSON.parse(raw) : [];
+    77→  } catch {
+    78→    return [];
+    79→  }
+    80→}
+    81→
+    82→function saveMeasurements(data: Measurement[]) {
+    83→  localStorage.setItem(STORAGE_KEYS.measurements, JSON.stringify(data));
+    84→}
+    85→
+    86→function loadSettings(): AppSettings {
+    87→  if (typeof window === "undefined") return { personalBest: 400 };
+    88→  try {
+    89→    const raw = localStorage.getItem(STORAGE_KEYS.settings);
+    90→    return raw ? JSON.parse(raw) : { personalBest: 400 };
+    91→  } catch {
+    92→    return { personalBest: 400 };
+    93→  }
+    94→}
+    95→
+    96→function saveSettings(data: AppSettings) {
+    97→  localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(data));
+    98→}
+    99→
+   100→function loadNotificationsPref(): boolean {
+   101→  if (typeof window === "undefined") return false;
+   102→  return localStorage.getItem(STORAGE_KEYS.notifications) === "true";
+   103→}
+   104→
+   105→function saveNotificationsPref(val: boolean) {
+   106→  localStorage.setItem(STORAGE_KEYS.notifications, JSON.stringify(val));
+   107→}
+   108→
+   109→function generateId(): string {
+   110→  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+   111→}
+   112→
+   113→/* ---------- zone helpers ---------- */
+   114→function round10(n: number): number {
+   115→  return Math.round(n / 10) * 10;
+   116→}
+   117→
+   118→function getZone(value: number, pb: number): "green" | "yellow" | "red" {
+   119→  if (value >= round10(pb * 0.8)) return "green";
+   120→  if (value >= round10(pb * 0.5)) return "yellow";
+   121→  return "red";
+   122→}
+   123→
+   124→function zoneColor(zone: "green" | "yellow" | "red") {
+   125→  if (zone === "green") return "bg-emerald-500";
+   126→  if (zone === "yellow") return "bg-amber-500";
+   127→  return "bg-red-500";
+   128→}
+   129→
+   130→function zoneLabel(zone: "green" | "yellow" | "red") {
+   131→  if (zone === "green") return "Зелёная";
+   132→  if (zone === "yellow") return "Жёлтая";
+   133→  return "Красная";
+   134→}
+   135→
+   136→function zoneBorderColor(zone: "green" | "yellow" | "red") {
+   137→  if (zone === "green") return "border-emerald-500";
+   138→  if (zone === "yellow") return "border-amber-500";
+   139→  return "border-red-500";
+   140→}
+   141→
+   142→/* ---------- chart config ---------- */
+   143→const chartConfig = {
+   144→  morningBefore: { label: "Утро до инг.", color: "#f97316" },
+   145→  morningAfter: { label: "Утро после инг.", color: "#ea580c" },
+   146→  eveningBefore: { label: "Вечер до инг.", color: "#8b5cf6" },
+   147→  eveningAfter: { label: "Вечер после инг.", color: "#7c3aed" },
+   148→} satisfies ChartConfig;
+   149→
+   150→/* ---------- main component ---------- */
+   151→export default function PeakFlowDiary() {
+   152→  const [mounted, setMounted] = useState(false);
+   153→
+   154→  const [measurements, setMeasurements] = useState<Measurement[]>([]);
+   155→  const [settings, setSettings] = useState<AppSettings>({ personalBest: 400 });
+   156→  const [inputValue, setInputValue] = useState("");
+   157→  const [period, setPeriod] = useState<"morning" | "evening">("morning");
+   158→  const [timing, setTiming] = useState<"before" | "after">("before");
+   159→  const [pbInput, setPbInput] = useState("400");
+   160→  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+   161→  const [reminderTimeout, setReminderTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
+   162→  const [editingPB, setEditingPB] = useState(false);
+   163→  const inputRef = useRef<HTMLInputElement>(null);
+   164→  const [chartDays, setChartDays] = useState(14);
+   165→
+   166→  /* --- load data from localStorage once after mount --- */
+   167→  useEffect(() => {
+   168→    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time init from browser API (localStorage)
+   169→    setMeasurements(loadMeasurements());
+   170→    const s = loadSettings();
+   171→    setSettings(s);
+   172→    setPbInput(String(s.personalBest));
+   173→    setNotificationsEnabled(loadNotificationsPref());
+   174→    const hour = new Date().getHours();
+   175→    setPeriod(hour >= 5 && hour < 15 ? "morning" : "evening");
+   176→    // Pre-fill with last measurement value
+   177→    const saved = loadMeasurements();
+   178→    if (saved.length > 0) {
+   179→      const lastVal = saved[saved.length - 1].value;
+   180→      setInputValue(String(lastVal));
+   181→    }
+   182→    setMounted(true);
+   183→  }, []);
+   184→
+   185→  /* --- add measurement --- */
+   186→  const addMeasurement = () => {
+   187→    const val = parseInt(inputValue);
+   188→    if (isNaN(val) || val < 50 || val > 900) {
+   189→      toast.error("Введите корректное значение ПСВ (50-900 л/мин)");
+   190→      return;
+   191→    }
+   192→
+   193→    const now = new Date();
+   194→    const newM: Measurement = {
+   195→      id: generateId(),
+   196→      value: val,
+   197→      period,
+   198→      timing,
+   199→      date: now.toISOString(),
+   200→      createdAt: now.toISOString(),
+   201→    };
+   202→
+   203→    const updated = [...measurements, newM];
+   204→    setMeasurements(updated);
+   205→    saveMeasurements(updated);
+   206→
+   207→    setInputValue(String(val));
+   208→
+   209→    // If this is a "before" measurement, switch to "after" and schedule reminder
+   210→    if (timing === "before") {
+   211→      setTiming("after");
+   212→      scheduleReminder();
+   213→    } else {
+   214→      setTiming("before");
+   215→    }
+   216→
+   217→    toast.success(`Записано: ${val} л/мин (${period === "morning" ? "утро" : "вечер"}, ${timing === "before" ? "до" : "после"} ингаляции)`);
+   218→    inputRef.current?.focus();
+   219→  };
+   220→
+   221→  /* --- delete measurement --- */
+   222→  const deleteMeasurement = (id: string) => {
+   223→    const updated = measurements.filter((m) => m.id !== id);
+   224→    setMeasurements(updated);
+   225→    saveMeasurements(updated);
+   226→    toast.success("Запись удалена");
+   227→  };
+   228→
+   229→  /* --- update personal best --- */
+   230→  const savePB = () => {
+   231→    const val = parseInt(pbInput);
+   232→    if (isNaN(val) || val < 50 || val > 900) {
+   233→      toast.error("Введите корректное значение (50-900)");
+   234→      return;
+   235→    }
+   236→    const updated = { ...settings, personalBest: val };
+   237→    setSettings(updated);
+   238→    saveSettings(updated);
+   239→    setEditingPB(false);
+   240→    toast.success(`Персональный лучший результат: ${val} л/мин`);
+   241→  };
+   242→
+   243→  /* --- notifications --- */
+   244→  const scheduleReminder = () => {
+   245→    const notifPref = loadNotificationsPref();
+   246→    if (!notifPref) return;
+   247→    if (reminderTimeout) clearTimeout(reminderTimeout);
+   248→    const timeout = setTimeout(() => {
+   249→      if (Notification.permission === "granted") {
+   250→        new Notification("Пикфлоуметрия", {
+   251→          body: "Прошло 30 минут — время сделать замер после ингаляции!",
+   252→          tag: "peakflow-reminder",
+   253→        });
+   254→      }
+   255→      toast.info("Прошло 30 минут — время сделать замер после ингаляции!", {
+   256→        duration: 10000,
+   257→      });
+   258→    }, 30 * 60 * 1000); // 30 minutes
+   259→    setReminderTimeout(timeout);
+   260→  };
+   261→
+   262→  const toggleNotifications = async () => {
+   263→    if (!notificationsEnabled) {
+   264→      if ("Notification" in window) {
+   265→        const perm = await Notification.requestPermission();
+   266→        if (perm === "granted") {
+   267→          setNotificationsEnabled(true);
+   268→          saveNotificationsPref(true);
+   269→          toast.success("Уведомления включены");
+   270→        } else {
+   271→          toast.error("Разрешите уведомления в настройках браузера");
+   272→        }
+   273→      } else {
+   274→        toast.error("Уведомления не поддерживаются в этом браузере");
+   275→      }
+   276→    } else {
+   277→      setNotificationsEnabled(false);
+   278→      saveNotificationsPref(false);
+   279→      if (reminderTimeout) clearTimeout(reminderTimeout);
+   280→      toast.success("Уведомления выключены");
+   281→    }
+   282→  };
+   283→
+   284→  /* --- CSV export (fully client-side) --- */
+   285→  const exportCSV = () => {
+   286→    const sorted = [...measurements].sort(
+   287→      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+   288→    );
+   289→
+   290→    const pb = settings.personalBest;
+   291→    const greenMin = round10(pb * 0.8);
+   292→    const yellowMin = round10(pb * 0.5);
+   293→
+   294→    const bom = "\uFEFF";
+   295→    const header = "Дата;Время;Период;Тип;ПСВ (л/мин);Зона\n";
+   296→
+   297→    const rows = sorted
+   298→      .map((m) => {
+   299→        const d = new Date(m.date);
+   300→        const dateStr = d.toLocaleDateString("ru-RU", {
+   301→          day: "2-digit",
+   302→          month: "2-digit",
+   303→          year: "numeric",
+   304→        });
+   305→        const timeStr = d.toLocaleTimeString("ru-RU", {
+   306→          hour: "2-digit",
+   307→          minute: "2-digit",
+   308→        });
+   309→        const periodStr = m.period === "morning" ? "Утро" : "Вечер";
+   310→        const timingStr =
+   311→          m.timing === "before" ? "До ингаляции" : "После ингаляции";
+   312→        const zone =
+   313→          m.value >= greenMin
+   314→            ? "Зелёная"
+   315→            : m.value >= yellowMin
+   316→              ? "Жёлтая"
+   317→              : "Красная";
+   318→        return `${dateStr};${timeStr};${periodStr};${timingStr};${m.value};${zone}`;
+   319→      })
+   320→      .join("\n");
+   321→
+   322→    const csv = bom + header + rows;
+   323→    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+   324→    const url = URL.createObjectURL(blob);
+   325→    const a = document.createElement("a");
+   326→    a.href = url;
+   327→    a.download = `peakflow_${format(new Date(), "yyyy-MM-dd")}.csv`;
+   328→    document.body.appendChild(a);
+   329→    a.click();
+   330→    document.body.removeChild(a);
+   331→    URL.revokeObjectURL(url);
+   332→    toast.success("CSV-файл загружен");
+   333→  };
+   334→
+   335→  /* --- chart data --- */
+   336→  const chartData = React.useMemo(() => {
+   337→    const days = Array.from({ length: chartDays }, (_, i) => {
+   338→      const d = startOfDay(subDays(new Date(), chartDays - 1 - i));
+   339→      const dayStr = format(d, "yyyy-MM-dd");
+   340→      const keys = [
+   341→        { key: "morningBefore", period: "morning" as const, timing: "before" as const },
+   342→        { key: "morningAfter", period: "morning" as const, timing: "after" as const },
+   343→        { key: "eveningBefore", period: "evening" as const, timing: "before" as const },
+   344→        { key: "eveningAfter", period: "evening" as const, timing: "after" as const },
+   345→      ];
+   346→
+   347→      const point: Record<string, string | number> = {
+   348→        date: format(d, "dd.MM", { locale: ru }),
+   349→      };
+   350→      for (const { key, period: p, timing: t } of keys) {
+   351→        const m = measurements.find(
+   352→          (m) =>
+   353→            format(new Date(m.date), "yyyy-MM-dd") === dayStr &&
+   354→            m.period === p &&
+   355→            m.timing === t
+   356→        );
+   357→        point[key] = m ? m.value : (undefined as unknown as number);
+   358→      }
+   359→      return point;
+   360→    });
+   361→    return days;
+   362→  }, [measurements, chartDays]);
+   363→
+   364→  const greenMin = round10(settings.personalBest * 0.8);
+   365→  const yellowMin = round10(settings.personalBest * 0.5);
+   366→
+   367→  /* --- today's measurements --- */
+   368→  const todayMeasurements = React.useMemo(() => {
+   369→    const todayStr = format(new Date(), "yyyy-MM-dd");
+   370→    return measurements.filter(
+   371→      (m) => format(new Date(m.date), "yyyy-MM-dd") === todayStr
+   372→    );
+   373→  }, [measurements]);
+   374→
+   375→  const todayDone = (p: "morning" | "evening", t: "before" | "after") =>
+   376→    todayMeasurements.some((m) => m.period === p && m.timing === t);
+   377→
+   378→  /* --- history list --- */
+   379→  const historyList = React.useMemo(() => {
+   380→    return [...measurements]
+   381→      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+   382→      .slice(0, 20);
+   383→  }, [measurements]);
+   384→
+   385→  if (!mounted) {
+   386→    return (
+   387→      <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 flex items-center justify-center">
+   388→        <Wind className="h-8 w-8 text-emerald-400 animate-pulse" />
+   389→      </div>
+   390→    );
+   391→  }
+   392→
+   393→  return (
+   394→    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 flex flex-col">
+   395→      {/* Header */}
+   396→      <header className="bg-white/80 backdrop-blur-sm border-b border-slate-200 sticky top-0 z-10">
+   397→        <div className="max-w-lg mx-auto px-4 py-3 flex items-center justify-between">
+   398→          <div className="flex items-center gap-2">
+   399→            <Wind className="h-6 w-6 text-emerald-600" />
+   400→            <h1 className="text-lg font-bold text-slate-800">Пикфлоуметрия</h1>
+   401→          </div>
+   402→          <div className="flex items-center gap-2">
+   403→            <Button
+   404→              variant="ghost"
+   405→              size="icon"
+   406→              onClick={toggleNotifications}
+   407→              className="h-9 w-9"
+   408→              title={
+   409→                notificationsEnabled
+   410→                  ? "Выключить уведомления"
+   411→                  : "Включить уведомления"
+   412→              }
+   413→            >
+   414→              {notificationsEnabled ? (
+   415→                <Bell className="h-4 w-4 text-emerald-600" />
+   416→              ) : (
+   417→                <BellOff className="h-4 w-4 text-slate-400" />
+   418→              )}
+   419→            </Button>
+   420→            <Button
+   421→              variant="ghost"
+   422→              size="icon"
+   423→              onClick={exportCSV}
+   424→              className="h-9 w-9"
+   425→              title="Экспорт CSV"
+   426→            >
+   427→              <Download className="h-4 w-4 text-slate-600" />
+   428→            </Button>
+   429→          </div>
+   430→        </div>
+   431→      </header>
+   432→
+   433→      {/* Main content */}
+   434→      <main className="flex-1 max-w-lg mx-auto w-full px-4 py-4 pb-8">
+   435→        <Tabs defaultValue="input" className="w-full">
+   436→          <TabsList className="w-full grid grid-cols-3">
+   437→            <TabsTrigger value="input" className="gap-1.5">
+   438→              <Plus className="h-3.5 w-3.5" />
+   439→              <span className="text-xs sm:text-sm">Ввод</span>
+   440→            </TabsTrigger>
+   441→            <TabsTrigger value="chart" className="gap-1.5">
+   442→              <Activity className="h-3.5 w-3.5" />
+   443→              <span className="text-xs sm:text-sm">График</span>
+   444→            </TabsTrigger>
+   445→            <TabsTrigger value="history" className="gap-1.5">
+   446→              <Clock className="h-3.5 w-3.5" />
+   447→              <span className="text-xs sm:text-sm">История</span>
+   448→            </TabsTrigger>
+   449→          </TabsList>
+   450→
+   451→          {/* ===== INPUT TAB ===== */}
+   452→          <TabsContent value="input">
+   453→            <div className="space-y-4 mt-4">
+   454→              {/* Today's checklist */}
+   455→              <Card>
+   456→                <CardHeader className="pb-2">
+   457→                  <CardTitle className="text-sm font-medium flex items-center gap-2">
+   458→                    <Check className="h-4 w-4 text-emerald-500" />
+   459→                    Сегодня, {format(new Date(), "dd MMMM", { locale: ru })}
+   460→                  </CardTitle>
+   461→                </CardHeader>
+   462→                <CardContent>
+   463→                  <div className="grid grid-cols-2 gap-2">
+   464→                    {(
+   465→                      [
+   466→                        { p: "morning" as const, t: "before" as const, label: "Утро (до)", icon: Sun },
+   467→                        { p: "morning" as const, t: "after" as const, label: "Утро (после)", icon: Sun },
+   468→                        { p: "evening" as const, t: "before" as const, label: "Вечер (до)", icon: Moon },
+   469→                        { p: "evening" as const, t: "after" as const, label: "Вечер (после)", icon: Moon },
+   470→                      ] as const
+   471→                    ).map(({ p, t, label, icon: Icon }) => (
+   472→                      <div
+   473→                        key={`${p}-${t}`}
+   474→                        className={`flex items-center gap-2 rounded-lg border p-2.5 text-sm transition-colors ${
+   475→                          todayDone(p, t)
+   476→                            ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+   477→                            : "bg-slate-50 border-slate-200 text-slate-500"
+   478→                        } ${
+   479→                          period === p && timing === t
+   480→                            ? "ring-2 ring-emerald-500 ring-offset-1"
+   481→                            : ""
+   482→                        }`}
+   483→                      >
+   484→                        <Icon className="h-4 w-4 shrink-0" />
+   485→                        <span className="text-xs font-medium leading-tight">
+   486→                          {label}
+   487→                        </span>
+   488→                        {todayDone(p, t) && (
+   489→                          <Check className="h-3.5 w-3.5 text-emerald-500 ml-auto shrink-0" />
+   490→                        )}
+   491→                      </div>
+   492→                    ))}
+   493→                  </div>
+   494→                </CardContent>
+   495→              </Card>
+   496→
+   497→              {/* Input card */}
+   498→              <Card className="border-2 border-emerald-200">
+   499→                <CardHeader className="pb-2">
+   500→                  <CardTitle className="text-base font-semibold">
+   501→                    Новый замер
+   502→                  </CardTitle>
+   503→                  <CardDescription>
+   504→                    {period === "morning" ? (
+   505→                      <span className="flex items-center gap-1">
+   506→                        <Sun className="h-3.5 w-3.5 text-amber-500" /> Утро
+   507→                      </span>
+   508→                    ) : (
+   509→                      <span className="flex items-center gap-1">
+   510→                        <Moon className="h-3.5 w-3.5 text-indigo-400" /> Вечер
+   511→                      </span>
+   512→                    )}
+   513→                    {" — "}
+   514→                    {timing === "before"
+   515→                      ? "до ингаляции"
+   516→                      : "через 30 мин после ингаляции"}
+   517→                  </CardDescription>
+   518→                </CardHeader>
+   519→                <CardContent className="space-y-4">
+   520→                  {/* Period toggle */}
+   521→                  <div className="flex gap-2">
+   522→                    <Button
+   523→                      variant={period === "morning" ? "default" : "outline"}
+   524→                      size="sm"
+   525→                      className="flex-1 gap-1.5"
+   526→                      onClick={() => setPeriod("morning")}
+   527→                    >
+   528→                      <Sun className="h-3.5 w-3.5" /> Утро
+   529→                    </Button>
+   530→                    <Button
+   531→                      variant={period === "evening" ? "default" : "outline"}
+   532→                      size="sm"
+   533→                      className="flex-1 gap-1.5"
+   534→                      onClick={() => setPeriod("evening")}
+   535→                    >
+   536→                      <Moon className="h-3.5 w-3.5" /> Вечер
+   537→                    </Button>
+   538→                  </div>
+   539→
+   540→                  {/* Timing toggle */}
+   541→                  <div className="flex gap-2">
+   542→                    <Button
+   543→                      variant={timing === "before" ? "default" : "outline"}
+   544→                      size="sm"
+   545→                      className="flex-1"
+   546→                      onClick={() => setTiming("before")}
+   547→                    >
+   548→                      До ингаляции
+   549→                    </Button>
+   550→                    <Button
+   551→                      variant={timing === "after" ? "default" : "outline"}
+   552→                      size="sm"
+   553→                      className="flex-1"
+   554→                      onClick={() => setTiming("after")}
+   555→                    >
+   556→                      После ингаляции
+   557→                    </Button>
+   558→                  </div>
+   559→
+   560→                  {/* Value input with +/- buttons */}
+   561→                  <div className="space-y-2">
+   562→                    <label className="text-xs text-muted-foreground block">
+   563→                      ПСВ (л/мин)
+   564→                    </label>
+   565→                    <div className="flex items-center gap-1">
+   566→                      <Button
+   567→                        variant="outline"
+   568→                        size="lg"
+   569→                        className="h-14 w-14 shrink-0 text-lg font-bold"
+   570→                        onClick={() => {
+   571→                          const cur = parseInt(inputValue) || 0;
+   572→                          const next = Math.max(50, cur - 10);
+   573→                          setInputValue(String(next));
+   574→                        }}
+   575→                        disabled={!inputValue || parseInt(inputValue) <= 50}
+   576→                      >
+   577→                        <Minus className="h-5 w-5" />
+   578→                      </Button>
+   579→                      <Input
+   580→                        ref={inputRef}
+   581→                        type="number"
+   582→                        inputMode="numeric"
+   583→                        placeholder="250"
+   584→                        value={inputValue}
+   585→                        onChange={(e) => setInputValue(e.target.value)}
+   586→                        onKeyDown={(e) => {
+   587→                          if (e.key === "Enter") addMeasurement();
+   588→                        }}
+   589→                        min={50}
+   590→                        max={900}
+   591→                        className="text-2xl font-bold h-14 text-center flex-1"
+   592→                      />
+   593→                      <Button
+   594→                        variant="outline"
+   595→                        size="lg"
+   596→                        className="h-14 w-14 shrink-0 text-lg font-bold"
+   597→                        onClick={() => {
+   598→                          const cur = parseInt(inputValue) || 0;
+   599→                          const next = Math.min(900, cur + 10);
+   600→                          setInputValue(String(next));
+   601→                        }}
+   602→                        disabled={!inputValue || parseInt(inputValue) >= 900}
+   603→                      >
+   604→                        <Plus className="h-5 w-5" />
+   605→                      </Button>
+   606→                    </div>
+   607→                    <Button
+   608→                      size="lg"
+   609→                      className="w-full h-12 text-base font-semibold bg-emerald-600 hover:bg-emerald-700"
+   610→                      onClick={addMeasurement}
+   611→                    >
+   612→                      <Plus className="h-5 w-5 mr-1" />
+   613→                      Записать
+   614→                    </Button>
+   615→                  </div>
+   616→
+   617→                  {/* Zone indicator */}
+   618→                  {inputValue && !isNaN(parseInt(inputValue)) && (
+   619→                    <div
+   620→                      className={`flex items-center justify-center gap-2 rounded-lg p-3 border-l-4 ${zoneBorderColor(
+   621→                        getZone(parseInt(inputValue), settings.personalBest)
+   622→                      )} ${
+   623→                        getZone(parseInt(inputValue), settings.personalBest) ===
+   624→                        "green"
+   625→                          ? "bg-emerald-50"
+   626→                          : getZone(parseInt(inputValue), settings.personalBest) ===
+   627→                              "yellow"
+   628→                            ? "bg-amber-50"
+   629→                            : "bg-red-50"
+   630→                      }`}
+   631→                    >
+   632→                      <div
+   633→                        className={`h-3 w-3 rounded-full ${zoneColor(
+   634→                          getZone(parseInt(inputValue), settings.personalBest)
+   635→                        )}`}
+   636→                      />
+   637→                      <span className="text-sm font-medium">
+   638→                        {zoneLabel(
+   639→                          getZone(parseInt(inputValue), settings.personalBest)
+   640→                        )}{" "}
+   641→                        зона
+   642→                      </span>
+   643→                      <span className="text-xs text-muted-foreground ml-1">
+   644→                        ({parseInt(inputValue)} / {settings.personalBest})
+   645→                      </span>
+   646→                    </div>
+   647→                  )}
+   648→                </CardContent>
+   649→              </Card>
+   650→
+   651→              {/* Zone legend */}
+   652→              <Card>
+   653→                <CardHeader className="pb-2">
+   654→                  <CardTitle className="text-sm font-medium flex items-center gap-2">
+   655→                    <Settings className="h-4 w-4" /> Зоны и настройки
+   656→                  </CardTitle>
+   657→                </CardHeader>
+   658→                <CardContent className="space-y-3">
+   659→                  <div className="space-y-2">
+   660→                    <div className="flex items-center justify-between text-sm">
+   661→                      <div className="flex items-center gap-2">
+   662→                        <div className="h-3 w-3 rounded-full bg-emerald-500" />
+   663→                        <span>Зелёная</span>
+   664→                      </div>
+   665→                      <span className="text-muted-foreground">
+   666→                        {greenMin}–{settings.personalBest} л/мин
+   667→                      </span>
+   668→                    </div>
+   669→                    <div className="flex items-center justify-between text-sm">
+   670→                      <div className="flex items-center gap-2">
+   671→                        <div className="h-3 w-3 rounded-full bg-amber-500" />
+   672→                        <span>Жёлтая</span>
+   673→                      </div>
+   674→                      <span className="text-muted-foreground">
+   675→                        {yellowMin}–{greenMin - 1} л/мин
+   676→                      </span>
+   677→                    </div>
+   678→                    <div className="flex items-center justify-between text-sm">
+   679→                      <div className="flex items-center gap-2">
+   680→                        <div className="h-3 w-3 rounded-full bg-red-500" />
+   681→                        <span>Красная</span>
+   682→                      </div>
+   683→                      <span className="text-muted-foreground">
+   684→                        &lt; {yellowMin} л/мин
+   685→                      </span>
+   686→                    </div>
+   687→                  </div>
+   688→
+   689→                  {/* Personal best setting */}
+   690→                  <div className="border-t pt-3">
+   691→                    {editingPB ? (
+   692→                      <div className="flex items-center gap-2">
+   693→                        <label className="text-xs text-muted-foreground whitespace-nowrap">
+   694→                          Перс. лучший:
+   695→                        </label>
+   696→                        <Input
+   697→                          type="number"
+   698→                          value={pbInput}
+   699→                          onChange={(e) => setPbInput(e.target.value)}
+   700→                          className="h-8 w-24 text-center"
+   701→                          min={50}
+   702→                          max={900}
+   703→                          autoFocus
+   704→                          onKeyDown={(e) => {
+   705→                            if (e.key === "Enter") savePB();
+   706→                            if (e.key === "Escape") setEditingPB(false);
+   707→                          }}
+   708→                        />
+   709→                        <Button size="sm" className="h-8" onClick={savePB}>
+   710→                          Сохранить
+   711→                        </Button>
+   712→                      </div>
+   713→                    ) : (
+   714→                      <button
+   715→                        onClick={() => setEditingPB(true)}
+   716→                        className="text-sm text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+   717→                      >
+   718→                        Персональный лучший:{" "}
+   719→                        <strong className="text-foreground">
+   720→                          {settings.personalBest} л/мин
+   721→                        </strong>
+   722→                        <span className="text-xs">(нажмите чтобы изменить)</span>
+   723→                      </button>
+   724→                    )}
+   725→                  </div>
+   726→                </CardContent>
+   727→              </Card>
+   728→            </div>
+   729→          </TabsContent>
+   730→
+   731→          {/* ===== CHART TAB ===== */}
+   732→          <TabsContent value="chart">
+   733→            <div className="space-y-4 mt-4">
+   734→              <Card>
+   735→                <CardHeader className="pb-2">
+   736→                  <div className="flex items-center justify-between">
+   737→                    <CardTitle className="text-base font-semibold flex items-center gap-2">
+   738→                      <Activity className="h-4 w-4 text-emerald-500" />
+   739→                      Динамика ПСВ
+   740→                    </CardTitle>
+   741→                    <div className="flex gap-1">
+   742→                      <Button
+   743→                        variant={chartDays === 7 ? "default" : "outline"}
+   744→                        size="sm"
+   745→                        className="h-7 text-xs"
+   746→                        onClick={() => setChartDays(7)}
+   747→                      >
+   748→                        7 дн
+   749→                      </Button>
+   750→                      <Button
+   751→                        variant={chartDays === 14 ? "default" : "outline"}
+   752→                        size="sm"
+   753→                        className="h-7 text-xs"
+   754→                        onClick={() => setChartDays(14)}
+   755→                      >
+   756→                        14 дн
+   757→                      </Button>
+   758→                      <Button
+   759→                        variant={chartDays === 30 ? "default" : "outline"}
+   760→                        size="sm"
+   761→                        className="h-7 text-xs"
+   762→                        onClick={() => setChartDays(30)}
+   763→                      >
+   764→                        30 дн
+   765→                      </Button>
+   766→                    </div>
+   767→                  </div>
+   768→                </CardHeader>
+   769→                <CardContent>
+   770→                  <ChartContainer config={chartConfig} className="h-[300px] w-full">
+   771→                    <LineChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+   772→                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
+   773→                      <XAxis
+   774→                        dataKey="date"
+   775→                        tickLine={false}
+   776→                        axisLine={false}
+   777→                        tick={{ fontSize: 11 }}
+   778→                        interval="preserveStartEnd"
+   779→                      />
+   780→                      <YAxis
+   781→                        domain={[0, "auto"]}
+   782→                        tickLine={false}
+   783→                        axisLine={false}
+   784→                        tick={{ fontSize: 11 }}
+   785→                        label={{
+   786→                          value: "л/мин",
+   787→                          angle: -90,
+   788→                          position: "insideLeft",
+   789→                          style: { fontSize: 11 },
+   790→                        }}
+   791→                      />
+   792→                      <ChartTooltip content={<ChartTooltipContent />} />
+   793→                      <ChartLegend content={<ChartLegendContent />} />
+   794→
+   795→                      {/* Zone reference areas */}
+   796→                      <ReferenceArea
+   797→                        y1={greenMin}
+   798→                        y2={settings.personalBest}
+   799→                        fill="#10b981"
+   800→                        fillOpacity={0.06}
+   801→                      />
+   802→                      <ReferenceArea
+   803→                        y1={yellowMin}
+   804→                        y2={greenMin}
+   805→                        fill="#f59e0b"
+   806→                        fillOpacity={0.06}
+   807→                      />
+   808→                      <ReferenceArea
+   809→                        y1={0}
+   810→                        y2={yellowMin}
+   811→                        fill="#ef4444"
+   812→                        fillOpacity={0.06}
+   813→                      />
+   814→
+   815→                      {/* Zone boundary lines */}
+   816→                      <ReferenceLine
+   817→                        y={greenMin}
+   818→                        stroke="#10b981"
+   819→                        strokeDasharray="6 3"
+   820→                        strokeWidth={1}
+   821→                        label={{
+   822→                          value: "80%",
+   823→                          position: "right",
+   824→                          style: { fontSize: 10, fill: "#10b981" },
+   825→                        }}
+   826→                      />
+   827→                      <ReferenceLine
+   828→                        y={yellowMin}
+   829→                        stroke="#f59e0b"
+   830→                        strokeDasharray="6 3"
+   831→                        strokeWidth={1}
+   832→                        label={{
+   833→                          value: "50%",
+   834→                          position: "right",
+   835→                          style: { fontSize: 10, fill: "#f59e0b" },
+   836→                        }}
+   837→                      />
+   838→                      <ReferenceLine
+   839→                        y={settings.personalBest}
+   840→                        stroke="#10b981"
+   841→                        strokeDasharray="3 3"
+   842→                        strokeWidth={1.5}
+   843→                        label={{
+   844→                          value: `ПЛР ${settings.personalBest}`,
+   845→                          position: "left",
+   846→                          style: { fontSize: 10, fill: "#10b981" },
+   847→                        }}
+   848→                      />
+   849→
+   850→                      <Line
+   851→                        type="monotone"
+   852→                        dataKey="morningBefore"
+   853→                        stroke="var(--color-morningBefore)"
+   854→                        strokeWidth={2}
+   855→                        dot={{ r: 3 }}
+   856→                        connectNulls
+   857→                      />
+   858→                      <Line
+   859→                        type="monotone"
+   860→                        dataKey="morningAfter"
+   861→                        stroke="var(--color-morningAfter)"
+   862→                        strokeWidth={2}
+   863→                        dot={{ r: 3 }}
+   864→                        connectNulls
+   865→                      />
+   866→                      <Line
+   867→                        type="monotone"
+   868→                        dataKey="eveningBefore"
+   869→                        stroke="var(--color-eveningBefore)"
+   870→                        strokeWidth={2}
+   871→                        dot={{ r: 3 }}
+   872→                        connectNulls
+   873→                      />
+   874→                      <Line
+   875→                        type="monotone"
+   876→                        dataKey="eveningAfter"
+   877→                        stroke="var(--color-eveningAfter)"
+   878→                        strokeWidth={2}
+   879→                        dot={{ r: 3 }}
+   880→                        connectNulls
+   881→                      />
+   882→                    </LineChart>
+   883→                  </ChartContainer>
+   884→                </CardContent>
+   885→              </Card>
+   886→            </div>
+   887→          </TabsContent>
+   888→
+   889→          {/* ===== HISTORY TAB ===== */}
+   890→          <TabsContent value="history">
+   891→            <div className="space-y-4 mt-4">
+   892→              <Card>
+   893→                <CardHeader className="pb-2">
+   894→                  <div className="flex items-center justify-between">
+   895→                    <CardTitle className="text-base font-semibold flex items-center gap-2">
+   896→                      <Clock className="h-4 w-4" />
+   897→                      Последние записи
+   898→                    </CardTitle>
+   899→                    <Button
+   900→                      size="sm"
+   901→                      variant="outline"
+   902→                      className="h-8 text-xs gap-1"
+   903→                      onClick={exportCSV}
+   904→                    >
+   905→                      <Download className="h-3 w-3" /> CSV
+   906→                    </Button>
+   907→                  </div>
+   908→                </CardHeader>
+   909→                <CardContent>
+   910→                  {historyList.length === 0 ? (
+   911→                    <div className="text-center text-muted-foreground text-sm py-8">
+   912→                      <Wind className="h-8 w-8 mx-auto mb-2 text-slate-300" />
+   913→                      <p>Записей пока нет</p>
+   914→                      <p className="text-xs mt-1">
+   915→                        Начните вводить данные пикфлоуметрии
+   916→                      </p>
+   917→                    </div>
+   918→                  ) : (
+   919→                    <div className="space-y-2 max-h-[500px] overflow-y-auto">
+   920→                      {historyList.map((m) => {
+   921→                        const d = new Date(m.date);
+   922→                        const zone = getZone(m.value, settings.personalBest);
+   923→                        return (
+   924→                          <div
+   925→                            key={m.id}
+   926→                            className={`flex items-center gap-3 rounded-lg border p-3 transition-colors ${zoneBorderColor(zone)} bg-white`}
+   927→                          >
+   928→                            <div
+   929→                              className={`h-2.5 w-2.5 rounded-full shrink-0 ${zoneColor(zone)}`}
+   930→                            />
+   931→                            <div className="flex-1 min-w-0">
+   932→                              <div className="flex items-center gap-2 text-sm font-medium">
+   933→                                <span className="text-lg font-bold">
+   934→                                  {m.value}
+   935→                                </span>
+   936→                                <span className="text-muted-foreground text-xs">
+   937→                                  л/мин
+   938→                                </span>
+   939→                                <Badge
+   940→                                  variant="secondary"
+   941→                                  className="text-xs px-1.5 py-0 ml-auto shrink-0"
+   942→                                >
+   943→                                  {zoneLabel(zone)}
+   944→                                </Badge>
+   945→                              </div>
+   946→                              <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5">
+   947→                                {m.period === "morning" ? (
+   948→                                  <Sun className="h-3 w-3 text-amber-400" />
+   949→                                ) : (
+   950→                                  <Moon className="h-3 w-3 text-indigo-400" />
+   951→                                )}
+   952→                                <span>
+   953→                                  {m.period === "morning" ? "Утро" : "Вечер"},{" "}
+   954→                                  {m.timing === "before" ? "до" : "после"}{" "}
+   955→                                  ингаляции
+   956→                                </span>
+   957→                                <span className="text-slate-300">|</span>
+   958→                                <span>
+   959→                                  {format(d, "dd.MM.yy, HH:mm", { locale: ru })}
+   960→                                </span>
+   961→                              </div>
+   962→                            </div>
+   963→                            <Button
+   964→                              variant="ghost"
+   965→                              size="icon"
+   966→                              className="h-8 w-8 shrink-0 text-slate-400 hover:text-red-500"
+   967→                              onClick={() => deleteMeasurement(m.id)}
+   968→                            >
+   969→                              <Trash2 className="h-3.5 w-3.5" />
+   970→                            </Button>
+   971→                          </div>
+   972→                        );
+   973→                      })}
+   974→                    </div>
+   975→                  )}
+   976→                </CardContent>
+   977→              </Card>
+   978→            </div>
+   979→          </TabsContent>
+   980→        </Tabs>
+   981→      </main>
+   982→
+   983→      {/* Footer */}
+   984→      <footer className="mt-auto border-t border-slate-200 bg-white/80 backdrop-blur-sm">
+   985→        <div className="max-w-lg mx-auto px-4 py-3 text-center text-xs text-muted-foreground">
+   986→          Все данные хранятся только на этом устройстве. Интернет не нужен.
+   987→        </div>
+   988→      </footer>
+   989→    </div>
+   990→  );
+   991→}
+   992→
