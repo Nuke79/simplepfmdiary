@@ -56,16 +56,29 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{
             __html: `
               if ('serviceWorker' in navigator) {
-                window.addEventListener('load', () => {
-                  const reg = navigator.serviceWorker.register('/simplepfmdiary/sw.js');
-                  reg.then(function(swReg) {
-                    swReg.addEventListener('updatefound', function() {
-                      var newSW = swReg.installing;
+                window.addEventListener('load', function() {
+                  navigator.serviceWorker.register('/simplepfmdiary/sw.js').then(function(reg) {
+                    // When a NEW SW takes control (replaces the old one)
+                    reg.addEventListener('controllerchange', function() {
+                      window.dispatchEvent(new CustomEvent('sw-update-available'));
+                    });
+
+                    // Also check via updatefound as fallback
+                    reg.addEventListener('updatefound', function() {
+                      var newSW = reg.installing;
                       newSW.addEventListener('statechange', function() {
-                        if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
+                        if (newSW.state === 'activated' && navigator.serviceWorker.controller) {
                           window.dispatchEvent(new CustomEvent('sw-update-available'));
                         }
                       });
+                    });
+
+                    // Periodically check for SW updates (every 30 min)
+                    setInterval(function() { reg.update(); }, 30 * 60 * 1000);
+
+                    // Check for updates when user returns to the tab
+                    document.addEventListener('visibilitychange', function() {
+                      if (document.visibilityState === 'visible') { reg.update(); }
                     });
                   });
                 });

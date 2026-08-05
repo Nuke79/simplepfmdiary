@@ -1,4 +1,4 @@
-const CACHE_NAME = "peakflow-v4";
+const CACHE_NAME = "peakflow-v5";
 const BASE = "/simplepfmdiary";
 const STATIC_ASSETS = [
   BASE + "/",
@@ -7,15 +7,15 @@ const STATIC_ASSETS = [
   BASE + "/icon-512.png",
 ];
 
-/* Install: cache core assets, wait for activation */
+/* Install: cache core assets, activate immediately to replace old SW */
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS))
   );
-  // Don't skipWaiting — let the old SW serve until user reloads
+  self.skipWaiting();
 });
 
-/* Activate: delete old caches, claim all clients */
+/* Activate: delete old caches, claim all clients immediately */
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
