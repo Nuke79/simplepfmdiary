@@ -745,63 +745,14 @@ export function PeakFlowDiary() {
           {/* ===== INPUT TAB ===== */}
           <TabsContent value="input">
             <div className="space-y-4 mt-4">
-              {/* Today's checklist */}
-              <Card className={isDark ? "border-slate-700 bg-slate-800/50" : ""}>
-                <CardHeader className="pb-2">
-                  <CardTitle className={`text-sm font-medium flex items-center gap-2 ${isDark ? "text-slate-200" : ""}`}>
-                    <Check className="h-4 w-4 text-emerald-500" />
-                    Сегодня, {format(new Date(), "dd MMMM", { locale: ru })}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-2 gap-2">
-                    {(
-                      [
-                        { p: "morning" as const, t: "before" as const, label: "Утро (до)", icon: Sun },
-                        { p: "morning" as const, t: "after" as const, label: "Утро (после)", icon: Sun },
-                        { p: "evening" as const, t: "before" as const, label: "Вечер (до)", icon: Moon },
-                        { p: "evening" as const, t: "after" as const, label: "Вечер (после)", icon: Moon },
-                      ] as const
-                    ).map(({ p, t, label, icon: Icon }) => (
-                      <div
-                        key={`${p}-${t}`}
-                        className={`flex items-center gap-2 rounded-lg border p-2.5 text-sm transition-colors ${
-                          isDark
-                            ? todayDone(p, t)
-                              ? "bg-emerald-950/50 border-emerald-800 text-emerald-300"
-                              : "bg-slate-800 border-slate-700 text-slate-500"
-                            : todayDone(p, t)
-                              ? "bg-emerald-50 border-emerald-200 text-emerald-700"
-                              : "bg-slate-50 border-slate-200 text-slate-500"
-                        } ${period === p && timing === t ? "ring-2 ring-emerald-500 ring-offset-1" : ""}`}
-                      >
-                        <Icon className="h-4 w-4 shrink-0" />
-                        <span className="text-xs font-medium leading-tight">{label}</span>
-                        {todayDone(p, t) && (
-                          <Check className="h-3.5 w-3.5 text-emerald-500 ml-auto shrink-0" />
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Input card */}
+              {/* Input card — moved to top */}
               <Card className={`border-2 ${isDark ? "border-emerald-800 bg-slate-800/50" : "border-emerald-200"}`}>
                 <CardHeader className="pb-2">
                   <CardTitle className={`text-base font-semibold ${isDark ? "text-slate-100" : ""}`}>Новый замер</CardTitle>
                   <CardDescription className={isDark ? "text-slate-400" : ""}>
-                    {period === "morning" ? (
-                      <span className="flex items-center gap-1">
-                        <Sun className="h-3.5 w-3.5 text-amber-500" /> Утро
-                      </span>
-                    ) : (
-                      <span className="flex items-center gap-1">
-                        <Moon className="h-3.5 w-3.5 text-indigo-400" /> Вечер
-                      </span>
-                    )}
-                    {" — "}
-                    {timing === "before" ? "до ингаляции" : `через ${settings.reminderMinutes} мин после ингаляции`}
+                    <span className="whitespace-nowrap">
+                      {period === "morning" ? "Утро" : "Вечер"}, {timing === "before" ? "до" : "после"} инг.
+                    </span>
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -964,6 +915,47 @@ export function PeakFlowDiary() {
                 </CardContent>
               </Card>
 
+              {/* Today's checklist — moved below input */}
+              <Card className={isDark ? "border-slate-700 bg-slate-800/50" : ""}>
+                <CardHeader className="pb-2">
+                  <CardTitle className={`text-sm font-medium flex items-center gap-2 ${isDark ? "text-slate-200" : ""}`}>
+                    <Check className="h-4 w-4 text-emerald-500" />
+                    Сегодня, {format(new Date(), "dd MMMM", { locale: ru })}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(
+                      [
+                        { p: "morning" as const, t: "before" as const, label: "Утро (до)", icon: Sun },
+                        { p: "morning" as const, t: "after" as const, label: "Утро (после)", icon: Sun },
+                        { p: "evening" as const, t: "before" as const, label: "Вечер (до)", icon: Moon },
+                        { p: "evening" as const, t: "after" as const, label: "Вечер (после)", icon: Moon },
+                      ] as const
+                    ).map(({ p, t, label, icon: Icon }) => (
+                      <div
+                        key={`${p}-${t}`}
+                        className={`flex items-center gap-2 rounded-lg border p-2.5 text-sm transition-colors ${
+                          isDark
+                            ? todayDone(p, t)
+                              ? "bg-emerald-950/50 border-emerald-800 text-emerald-300"
+                              : "bg-slate-800 border-slate-700 text-slate-500"
+                            : todayDone(p, t)
+                              ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+                              : "bg-slate-50 border-slate-200 text-slate-500"
+                        } ${period === p && timing === t ? "ring-2 ring-emerald-500 ring-offset-1" : ""}`}
+                      >
+                        <Icon className="h-4 w-4 shrink-0" />
+                        <span className="text-xs font-medium leading-tight">{label}</span>
+                        {todayDone(p, t) && (
+                          <Check className="h-3.5 w-3.5 text-emerald-500 ml-auto shrink-0" />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+
               {/* Zone legend + Settings (collapsed by default) */}
               <Card ref={settingsRef} className={isDark ? "border-slate-700 bg-slate-800/50" : ""}>
                 <CardHeader className="pb-2">
@@ -1051,7 +1043,7 @@ export function PeakFlowDiary() {
                           type="number"
                           value={reminderMinInput}
                           onChange={(e) => setReminderMinInput(e.target.value)}
-                          className={`h-8 w-16 text-center ${isDark ? "bg-slate-700 border-slate-600 text-slate-100" : ""}`}
+                          className={`h-8 w-20 text-center ${isDark ? "bg-slate-700 border-slate-600 text-slate-100" : ""}`}
                           min={1}
                           max={120}
                           autoFocus
