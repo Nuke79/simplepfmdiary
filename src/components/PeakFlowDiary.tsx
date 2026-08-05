@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   LineChart,
   Line,
@@ -10,7 +10,7 @@ import {
   ReferenceLine,
   ReferenceArea,
 } from "recharts";
-import { format, subDays, startOfDay } from "date-fns";
+import { format, subDays, startOfDay, isToday, parseISO } from "date-fns";
 import { ru } from "date-fns/locale";
 import {
   Card,
@@ -37,7 +37,7 @@ import {
   Plus,
   Minus,
   Trash2,
-  Download,
+  Upload,
   Settings,
   Activity,
   Wind,
@@ -45,6 +45,8 @@ import {
   BellOff,
   Clock,
   Check,
+  CalendarDays,
+  Palette,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -54,13 +56,18 @@ interface Measurement {
   value: number;
   period: "morning" | "evening";
   timing: "before" | "after";
-  date: string;
-  createdAt: string;
+  date: string;       // ISO datetime of the measurement
+  createdAt: string; // ISO datetime when record was created
 }
 
 interface AppSettings {
   personalBest: number;
+  reminderMinutes: number; // configurable reminder delay (default 30)
+  theme: "light" | "dark" | "system";
 }
+
+/* ---------- version ---------- */
+const APP_VERSION = "1.1.0";
 
 /* ---------- local storage helpers ---------- */
 const STORAGE_KEYS = {
@@ -85,9 +92,9 @@ function saveMeasurements(data: Measurement[]) {
 function loadSettings(): AppSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.settings);
-    return raw ? JSON.parse(raw) : { personalBest: 400 };
+    return raw ? JSON.parse(raw) : { personalBest: 400, reminderMinutes: 30, theme: "system" };
   } catch {
-    return { personalBest: 400 };
+    return { personalBest: 400, reminderMinutes: 30, theme: "system" };
   }
 }
 
@@ -144,6 +151,17 @@ const chartConfig = {
   eveningAfter: { label: "Вечер после инг.", color: "#7c3aed" },
 } satisfies ChartConfig;
 
+/* ---------- theme helper ---------- */
+function getEffectiveTheme(settingsTheme: "light" | "dark" | "system"): "light" | "dark" {
+  if (settingsTheme === "system") {
+    if (typeof window !== "undefined") {
+      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    }
+    return "light";
+  }
+  return settingsTheme;
+}
+
 /* ---------- main component ---------- */
 export function PeakFlowDiary() {
   const [measurements, setMeasurements] = useState<Measurement[]>(() => loadMeasurements());
@@ -152,19 +170,63 @@ export function PeakFlowDiary() {
     const saved = loadMeasurements();
     return saved.length > 0 ? String(saved[saved.length - 1].value) : "";
   });
+
+  // #2: Auto morning/evening by system time (before 15:00 = morning)
   const [period, setPeriod] = useState<"morning" | "evening">(() => {
     const hour = new Date().getHours();
-    return hour >= 5 && hour < 15 ? "morning" : "evening";
+    return hour < 15 ? "morning" : "evening";
   });
   const [timing, setTiming] = useState<"before" | "after">("before");
   const [pbInput, setPbInput] = useState(() => String(loadSettings().personalBest));
+  const [reminderMinInput, setReminderMinInput] = useState(() => String(loadSettings().reminderMinutes));
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => loadNotificationsPref());
   const [reminderTimeout, setReminderTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
   const [editingPB, setEditingPB] = useState(false);
+  const [editingReminder, setEditingReminder] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const [chartDays, setChartDays] = useState(14);
 
-  /* --- add measurement --- */
+  // #1: Date/time picker for measurements
+  const [selectedDate, setSelectedDate] = useState<string>(() => format(new Date(), "yyyy-MM-dd"));
+  const [selectedTime, setSelectedTime] = useState<string>(() => {
+    const now = new Date();
+    return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  });
+  const [showDatePicker, setShowDatePicker] = useState(false);
+
+  // #5: Theme state
+  const [theme, setTheme] = useState<"light" | "dark" | "system">(() => loadSettings().theme);
+
+  // #4: Easter egg state
+  const [tapCount, setTapCount] = useState(0);
+  const [showEasterEgg, setShowEasterEgg] = useState(false);
+
+  // #6: Swipe support for tabs
+  const [activeTab, setActiveTab] = useState("input");
+  const touchStartX = useRef<number | null>(null);
+  const touchEndX = useRef<number | null>(null);
+
+  // Apply theme on mount and changes
+  useEffect(() => {
+    const effective = getEffectiveTheme(theme);
+    document.documentElement.classList.toggle("dark", effective === "dark");
+    document.documentElement.style.colorScheme = effective;
+  }, [theme]);
+
+  // Listen for system theme changes
+  useEffect(() => {
+    if (theme !== "system") return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = () => {
+      document.documentElement.classList.toggle("dark", mq.matches);
+      document.documentElement.style.colorScheme = mq.matches ? "dark" : "light";
+    };
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, [theme]);
+
+  /* --- add measurement (#1: with custom date/time) --- */
   const addMeasurement = () => {
     const val = parseInt(inputValue);
     if (isNaN(val) || val < 50 || val > 900) {
@@ -172,13 +234,21 @@ export function PeakFlowDiary() {
       return;
     }
 
+    const measurementDateTime = new Date(`${selectedDate}T${selectedTime}`);
     const now = new Date();
+
+    // Validate: future dates not allowed
+    if (measurementDateTime > now) {
+      toast.error("Нельзя записать замер в будущем");
+      return;
+    }
+
     const newM: Measurement = {
       id: generateId(),
       value: val,
       period,
       timing,
-      date: now.toISOString(),
+      date: measurementDateTime.toISOString(),
       createdAt: now.toISOString(),
     };
 
@@ -187,6 +257,16 @@ export function PeakFlowDiary() {
     saveMeasurements(updated);
     setInputValue(String(val));
 
+    // #10: Auto-update personal best if new value is higher
+    if (val > settings.personalBest) {
+      const newSettings = { ...settings, personalBest: val };
+      setSettings(newSettings);
+      saveSettings(newSettings);
+      setPbInput(String(val));
+      toast.success(`Новый персональный лучший результат: ${val} л/мин!`);
+    }
+
+    // #3: Auto-switch before→after with reminder
     if (timing === "before") {
       setTiming("after");
       scheduleReminder();
@@ -194,7 +274,10 @@ export function PeakFlowDiary() {
       setTiming("before");
     }
 
-    toast.success(`Записано: ${val} л/мин (${period === "morning" ? "утро" : "вечер"}, ${timing === "before" ? "до" : "после"} ингаляции)`);
+    const periodLabel = period === "morning" ? "утро" : "вечер";
+    const timingLabel = timing === "before" ? "до" : "после";
+    toast.success(`Записано: ${val} л/мин (${periodLabel}, ${timingLabel} ингаляции)`);
+
     inputRef.current?.focus();
   };
 
@@ -220,21 +303,45 @@ export function PeakFlowDiary() {
     toast.success(`Персональный лучший результат: ${val} л/мин`);
   };
 
-  /* --- notifications --- */
+  /* --- save reminder minutes (#3: configurable) --- */
+  const saveReminderMin = () => {
+    const val = parseInt(reminderMinInput);
+    if (isNaN(val) || val < 1 || val > 120) {
+      toast.error("Введите корректное значение (1-120 минут)");
+      return;
+    }
+    const updated = { ...settings, reminderMinutes: val };
+    setSettings(updated);
+    saveSettings(updated);
+    setEditingReminder(false);
+    toast.success(`Напоминание через ${val} мин.`);
+  };
+
+  /* --- theme toggle (#5) --- */
+  const cycleTheme = () => {
+    const next = theme === "light" ? "dark" : theme === "dark" ? "system" : "light";
+    setTheme(next);
+    const updated = { ...settings, theme: next };
+    setSettings(updated);
+    saveSettings(updated);
+  };
+
+  /* --- notifications (#3: configurable delay) --- */
   const scheduleReminder = () => {
     if (!loadNotificationsPref()) return;
     if (reminderTimeout) clearTimeout(reminderTimeout);
+    const delay = settings.reminderMinutes * 60 * 1000;
     const timeout = setTimeout(() => {
       if (Notification.permission === "granted") {
-        new Notification("Пикфлоуметрия", {
-          body: "Прошло 30 минут — время сделать замер после ингаляции!",
+        new Notification("Дневник пикфлоуметрии", {
+          body: `Прошло ${settings.reminderMinutes} мин. — время сделать замер после ингаляции!`,
           tag: "peakflow-reminder",
         });
       }
-      toast.info("Прошло 30 минут — время сделать замер после ингаляции!", {
+      toast.info(`Прошло ${settings.reminderMinutes} мин. — время сделать замер после ингаляции!`, {
         duration: 10000,
       });
-    }, 30 * 60 * 1000);
+    }, delay);
     setReminderTimeout(timeout);
   };
 
@@ -260,7 +367,7 @@ export function PeakFlowDiary() {
     }
   };
 
-  /* --- CSV export (fully client-side) --- */
+  /* --- CSV export (#9: Upload icon = arrow up) --- */
   const exportCSV = () => {
     const sorted = [...measurements].sort(
       (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
@@ -355,16 +462,74 @@ export function PeakFlowDiary() {
       .slice(0, 20);
   }, [measurements]);
 
+  /* --- #4: Easter egg --- */
+  const handleTitleTap = () => {
+    setTapCount((prev) => {
+      const next = prev + 1;
+      if (next >= 5) {
+        setShowEasterEgg(true);
+        setTimeout(() => {
+          setShowEasterEgg(false);
+          setTapCount(0);
+        }, 3000);
+        return 0;
+      }
+      return next;
+    });
+  };
+
+  /* --- #6: Swipe handlers for tabs --- */
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+  }, []);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    touchEndX.current = e.touches[0].clientX;
+  }, []);
+
+  const handleTouchEnd = useCallback(() => {
+    if (!touchStartX.current || !touchEndX.current) return;
+    const diff = touchStartX.current - touchEndX.current;
+    const tabs = ["input", "chart", "history"];
+    const currentIndex = tabs.indexOf(activeTab);
+    if (Math.abs(diff) > 50) {
+      if (diff > 0 && currentIndex < tabs.length - 1) {
+        setActiveTab(tabs[currentIndex + 1]);
+      } else if (diff < 0 && currentIndex > 0) {
+        setActiveTab(tabs[currentIndex - 1]);
+      }
+    }
+    touchStartX.current = null;
+    touchEndX.current = null;
+  }, [activeTab]);
+
+  const isDark = getEffectiveTheme(theme) === "dark";
+
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 flex flex-col">
-      {/* Header */}
-      <header className="bg-white/80 backdrop-blur-sm border-b border-slate-200 sticky top-0 z-10">
+    <div className={`min-h-screen flex flex-col ${isDark ? "dark bg-gradient-to-b from-slate-950 to-slate-900" : "bg-gradient-to-b from-slate-50 to-slate-100"}`}>
+      {/* Header — #8: renamed, #5: theme-aware */}
+      <header className={`backdrop-blur-sm border-b sticky top-0 z-10 ${isDark ? "bg-slate-900/80 border-slate-800" : "bg-white/80 border-slate-200"}`}>
         <div className="max-w-lg mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Wind className="h-6 w-6 text-emerald-600" />
-            <h1 className="text-lg font-bold text-slate-800">Пикфлоуметрия</h1>
+          <div
+            className="flex items-center gap-2 cursor-pointer select-none"
+            onClick={handleTitleTap}
+          >
+            <Wind className="h-6 w-6 text-emerald-500" />
+            <h1 className={`text-lg font-bold ${isDark ? "text-slate-100" : "text-slate-800"}`}>
+              Дневник пикфлоуметрии
+            </h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
+            {/* #5: Theme toggle button */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={cycleTheme}
+              className="h-9 w-9"
+              title={`Тема: ${theme === "light" ? "светлая" : theme === "dark" ? "тёмная" : "системная"}`}
+            >
+              <Palette className={`h-4 w-4 ${theme === "light" ? "text-amber-500" : theme === "dark" ? "text-indigo-400" : "text-emerald-600"}`} />
+            </Button>
             <Button
               variant="ghost"
               size="icon"
@@ -375,9 +540,10 @@ export function PeakFlowDiary() {
               {notificationsEnabled ? (
                 <Bell className="h-4 w-4 text-emerald-600" />
               ) : (
-                <BellOff className="h-4 w-4 text-slate-400" />
+                <BellOff className={`h-4 w-4 ${isDark ? "text-slate-500" : "text-slate-400"}`} />
               )}
             </Button>
+            {/* #9: Upload icon (arrow up from container) instead of Download */}
             <Button
               variant="ghost"
               size="icon"
@@ -385,16 +551,45 @@ export function PeakFlowDiary() {
               className="h-9 w-9"
               title="Экспорт CSV"
             >
-              <Download className="h-4 w-4 text-slate-600" />
+              <Upload className={`h-4 w-4 ${isDark ? "text-slate-300" : "text-slate-600"}`} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setShowSettings(!showSettings)}
+              className="h-9 w-9"
+              title="Настройки"
+            >
+              <Settings className={`h-4 w-4 ${isDark ? "text-slate-300" : "text-slate-600"}`} />
             </Button>
           </div>
         </div>
       </header>
 
-      {/* Main content */}
-      <main className="flex-1 max-w-lg mx-auto w-full px-4 py-4 pb-8">
-        <Tabs defaultValue="input" className="w-full">
-          <TabsList className="w-full grid grid-cols-3">
+      {/* #4: Easter egg popup */}
+      {showEasterEgg && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className={`rounded-2xl p-6 mx-4 text-center shadow-2xl max-w-xs ${isDark ? "bg-slate-800" : "bg-white"}`}>
+            <div className="text-4xl mb-2">🫁</div>
+            <h2 className={`text-lg font-bold mb-1 ${isDark ? "text-slate-100" : "text-slate-800"}`}>Simple PFM Diary</h2>
+            <p className={`text-sm mb-3 ${isDark ? "text-slate-400" : "text-muted-foreground"}`}>Версия {APP_VERSION}</p>
+            <p className={`text-xs ${isDark ? "text-slate-500" : "text-muted-foreground"}`}>
+              Дышите свободно! Данные хранятся только на вашем устройстве.
+            </p>
+            <div className="mt-3 text-xs text-emerald-600 font-mono">v{APP_VERSION}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Main content — #6: swipe handlers */}
+      <main
+        className="flex-1 max-w-lg mx-auto w-full px-4 py-4 pb-8"
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+      >
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <TabsList className={`w-full grid grid-cols-3 ${isDark ? "bg-slate-800" : ""}`}>
             <TabsTrigger value="input" className="gap-1.5">
               <Plus className="h-3.5 w-3.5" />
               <span className="text-xs sm:text-sm">Ввод</span>
@@ -413,9 +608,9 @@ export function PeakFlowDiary() {
           <TabsContent value="input">
             <div className="space-y-4 mt-4">
               {/* Today's checklist */}
-              <Card>
+              <Card className={isDark ? "border-slate-700 bg-slate-800/50" : ""}>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <CardTitle className={`text-sm font-medium flex items-center gap-2 ${isDark ? "text-slate-200" : ""}`}>
                     <Check className="h-4 w-4 text-emerald-500" />
                     Сегодня, {format(new Date(), "dd MMMM", { locale: ru })}
                   </CardTitle>
@@ -433,9 +628,13 @@ export function PeakFlowDiary() {
                       <div
                         key={`${p}-${t}`}
                         className={`flex items-center gap-2 rounded-lg border p-2.5 text-sm transition-colors ${
-                          todayDone(p, t)
-                            ? "bg-emerald-50 border-emerald-200 text-emerald-700"
-                            : "bg-slate-50 border-slate-200 text-slate-500"
+                          isDark
+                            ? todayDone(p, t)
+                              ? "bg-emerald-950/50 border-emerald-800 text-emerald-300"
+                              : "bg-slate-800 border-slate-700 text-slate-500"
+                            : todayDone(p, t)
+                              ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+                              : "bg-slate-50 border-slate-200 text-slate-500"
                         } ${period === p && timing === t ? "ring-2 ring-emerald-500 ring-offset-1" : ""}`}
                       >
                         <Icon className="h-4 w-4 shrink-0" />
@@ -450,10 +649,10 @@ export function PeakFlowDiary() {
               </Card>
 
               {/* Input card */}
-              <Card className="border-2 border-emerald-200">
+              <Card className={`border-2 ${isDark ? "border-emerald-800 bg-slate-800/50" : "border-emerald-200"}`}>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-base font-semibold">Новый замер</CardTitle>
-                  <CardDescription>
+                  <CardTitle className={`text-base font-semibold ${isDark ? "text-slate-100" : ""}`}>Новый замер</CardTitle>
+                  <CardDescription className={isDark ? "text-slate-400" : ""}>
                     {period === "morning" ? (
                       <span className="flex items-center gap-1">
                         <Sun className="h-3.5 w-3.5 text-amber-500" /> Утро
@@ -464,10 +663,47 @@ export function PeakFlowDiary() {
                       </span>
                     )}
                     {" — "}
-                    {timing === "before" ? "до ингаляции" : "через 30 мин после ингаляции"}
+                    {timing === "before" ? "до ингаляции" : `через ${settings.reminderMinutes} мин после ингаляции`}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
+                  {/* #1: Date/time picker */}
+                  <div className={`rounded-lg border p-3 space-y-2 ${isDark ? "border-slate-700 bg-slate-900/50" : "bg-slate-50"}`}>
+                    <div className="flex items-center gap-2">
+                      <CalendarDays className="h-4 w-4 text-emerald-500 shrink-0" />
+                      <span className={`text-xs font-medium ${isDark ? "text-slate-300" : "text-muted-foreground"}`}>Дата и время замера</span>
+                      {isToday(parseISO(selectedDate)) ? (
+                        <Badge variant="secondary" className="text-xs px-1.5 py-0 ml-auto">Сейчас</Badge>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            const now = new Date();
+                            setSelectedDate(format(now, "yyyy-MM-dd"));
+                            setSelectedTime(`${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`);
+                          }}
+                          className="text-xs text-emerald-600 hover:text-emerald-700 ml-auto"
+                        >
+                          Сбросить на сейчас
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <Input
+                        type="date"
+                        value={selectedDate}
+                        onChange={(e) => setSelectedDate(e.target.value)}
+                        max={format(new Date(), "yyyy-MM-dd")}
+                        className={`flex-1 h-9 text-sm ${isDark ? "bg-slate-800 border-slate-600 text-slate-200" : ""}`}
+                      />
+                      <Input
+                        type="time"
+                        value={selectedTime}
+                        onChange={(e) => setSelectedTime(e.target.value)}
+                        className={`w-24 h-9 text-sm ${isDark ? "bg-slate-800 border-slate-600 text-slate-200" : ""}`}
+                      />
+                    </div>
+                  </div>
+
                   {/* Period toggle */}
                   <div className="flex gap-2">
                     <Button
@@ -510,7 +746,7 @@ export function PeakFlowDiary() {
 
                   {/* Value input with +/- buttons */}
                   <div className="space-y-2">
-                    <label className="text-xs text-muted-foreground block">
+                    <label className={`text-xs block ${isDark ? "text-slate-400" : "text-muted-foreground"}`}>
                       ПСВ (л/мин)
                     </label>
                     <div className="flex items-center gap-1">
@@ -539,7 +775,7 @@ export function PeakFlowDiary() {
                         }}
                         min={50}
                         max={900}
-                        className="text-2xl font-bold h-14 text-center flex-1"
+                        className={`text-2xl font-bold h-14 text-center flex-1 ${isDark ? "bg-slate-800 border-slate-600 text-slate-100" : ""}`}
                       />
                       <Button
                         variant="outline"
@@ -572,17 +808,17 @@ export function PeakFlowDiary() {
                         getZone(parseInt(inputValue), settings.personalBest)
                       )} ${
                         getZone(parseInt(inputValue), settings.personalBest) === "green"
-                          ? "bg-emerald-50"
+                          ? isDark ? "bg-emerald-950/30" : "bg-emerald-50"
                           : getZone(parseInt(inputValue), settings.personalBest) === "yellow"
-                            ? "bg-amber-50"
-                            : "bg-red-50"
+                            ? isDark ? "bg-amber-950/30" : "bg-amber-50"
+                            : isDark ? "bg-red-950/30" : "bg-red-50"
                       }`}
                     >
                       <div className={`h-3 w-3 rounded-full ${zoneColor(getZone(parseInt(inputValue), settings.personalBest))}`} />
                       <span className="text-sm font-medium">
                         {zoneLabel(getZone(parseInt(inputValue), settings.personalBest))} зона
                       </span>
-                      <span className="text-xs text-muted-foreground ml-1">
+                      <span className={`text-xs ml-1 ${isDark ? "text-slate-400" : "text-muted-foreground"}`}>
                         ({parseInt(inputValue)} / {settings.personalBest})
                       </span>
                     </div>
@@ -590,56 +826,60 @@ export function PeakFlowDiary() {
                 </CardContent>
               </Card>
 
-              {/* Zone legend */}
-              <Card>
+              {/* Zone legend + Settings (collapsed by default) */}
+              <Card className={isDark ? "border-slate-700 bg-slate-800/50" : ""}>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium flex items-center gap-2">
-                    <Settings className="h-4 w-4" /> Зоны и настройки
+                  <CardTitle className={`text-sm font-medium flex items-center gap-2 cursor-pointer ${isDark ? "text-slate-200" : ""}`}
+                    onClick={() => setShowSettings(!showSettings)}
+                  >
+                    <Settings className="h-4 w-4" />
+                    Зоны и настройки
+                    <span className={`ml-auto text-xs transition-transform ${showSettings ? "rotate-180" : ""}`}>&#9660;</span>
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-3">
+                <CardContent className={`${showSettings ? "" : "hidden"} space-y-3`}>
                   <div className="space-y-2">
                     <div className="flex items-center justify-between text-sm">
                       <div className="flex items-center gap-2">
                         <div className="h-3 w-3 rounded-full bg-emerald-500" />
-                        <span>Зелёная</span>
+                        <span className={isDark ? "text-slate-200" : ""}>Зелёная</span>
                       </div>
-                      <span className="text-muted-foreground">
+                      <span className={isDark ? "text-slate-400" : "text-muted-foreground"}>
                         {greenMin}–{settings.personalBest} л/мин
                       </span>
                     </div>
                     <div className="flex items-center justify-between text-sm">
                       <div className="flex items-center gap-2">
                         <div className="h-3 w-3 rounded-full bg-amber-500" />
-                        <span>Жёлтая</span>
+                        <span className={isDark ? "text-slate-200" : ""}>Жёлтая</span>
                       </div>
-                      <span className="text-muted-foreground">
+                      <span className={isDark ? "text-slate-400" : "text-muted-foreground"}>
                         {yellowMin}–{greenMin - 1} л/мин
                       </span>
                     </div>
                     <div className="flex items-center justify-between text-sm">
                       <div className="flex items-center gap-2">
                         <div className="h-3 w-3 rounded-full bg-red-500" />
-                        <span>Красная</span>
+                        <span className={isDark ? "text-slate-200" : ""}>Красная</span>
                       </div>
-                      <span className="text-muted-foreground">
+                      <span className={isDark ? "text-slate-400" : "text-muted-foreground"}>
                         &lt; {yellowMin} л/мин
                       </span>
                     </div>
                   </div>
 
-                  {/* Personal best setting */}
-                  <div className="border-t pt-3">
+                  {/* Personal best setting — #10: auto-update + manual edit */}
+                  <div className={`border-t pt-3 ${isDark ? "border-slate-700" : ""}`}>
                     {editingPB ? (
                       <div className="flex items-center gap-2">
-                        <label className="text-xs text-muted-foreground whitespace-nowrap">
+                        <label className={`text-xs whitespace-nowrap ${isDark ? "text-slate-400" : "text-muted-foreground"}`}>
                           Перс. лучший:
                         </label>
                         <Input
                           type="number"
                           value={pbInput}
                           onChange={(e) => setPbInput(e.target.value)}
-                          className="h-8 w-24 text-center"
+                          className={`h-8 w-24 text-center ${isDark ? "bg-slate-700 border-slate-600 text-slate-100" : ""}`}
                           min={50}
                           max={900}
                           autoFocus
@@ -648,17 +888,52 @@ export function PeakFlowDiary() {
                             if (e.key === "Escape") setEditingPB(false);
                           }}
                         />
-                        <Button size="sm" className="h-8" onClick={savePB}>
-                          Сохранить
-                        </Button>
+                        <Button size="sm" className="h-8" onClick={savePB}>OK</Button>
+                        <Button size="sm" variant="ghost" className="h-8" onClick={() => setEditingPB(false)}>Отмена</Button>
                       </div>
                     ) : (
                       <button
                         onClick={() => setEditingPB(true)}
-                        className="text-sm text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+                        className={`text-sm transition-colors flex items-center gap-1 ${isDark ? "text-slate-400 hover:text-slate-200" : "text-muted-foreground hover:text-foreground"}`}
                       >
-                        Персональный лучший: <strong className="text-foreground">{settings.personalBest} л/мин</strong>
-                        <span className="text-xs">(нажмите чтобы изменить)</span>
+                        Персональный лучший: <strong className={isDark ? "text-slate-100" : "text-foreground"}>{settings.personalBest} л/мин</strong>
+                        <span className={`text-xs ${isDark ? "text-slate-500" : ""}`}>(нажмите чтобы изменить)</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* #3: Configurable reminder delay */}
+                  <div className={`border-t pt-3 ${isDark ? "border-slate-700" : ""}`}>
+                    {editingReminder ? (
+                      <div className="flex items-center gap-2">
+                        <label className={`text-xs whitespace-nowrap ${isDark ? "text-slate-400" : "text-muted-foreground"}`}>
+                          Напоминание через:
+                        </label>
+                        <Input
+                          type="number"
+                          value={reminderMinInput}
+                          onChange={(e) => setReminderMinInput(e.target.value)}
+                          className={`h-8 w-16 text-center ${isDark ? "bg-slate-700 border-slate-600 text-slate-100" : ""}`}
+                          min={1}
+                          max={120}
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") saveReminderMin();
+                            if (e.key === "Escape") setEditingReminder(false);
+                          }}
+                        />
+                        <span className={`text-xs ${isDark ? "text-slate-400" : "text-muted-foreground"}`}>мин.</span>
+                        <Button size="sm" className="h-8" onClick={saveReminderMin}>OK</Button>
+                        <Button size="sm" variant="ghost" className="h-8" onClick={() => setEditingReminder(false)}>Отмена</Button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setEditingReminder(true)}
+                        className={`text-sm transition-colors flex items-center gap-1 ${isDark ? "text-slate-400 hover:text-slate-200" : "text-muted-foreground hover:text-foreground"}`}
+                      >
+                        <Bell className="h-3.5 w-3.5" />
+                        Напоминание: <strong className={isDark ? "text-slate-100" : "text-foreground"}>{settings.reminderMinutes} мин.</strong>
+                        <span className={`text-xs ${isDark ? "text-slate-500" : ""}`}>(нажмите чтобы изменить)</span>
                       </button>
                     )}
                   </div>
@@ -670,10 +945,10 @@ export function PeakFlowDiary() {
           {/* ===== CHART TAB ===== */}
           <TabsContent value="chart">
             <div className="space-y-4 mt-4">
-              <Card>
+              <Card className={isDark ? "border-slate-700 bg-slate-800/50" : ""}>
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between">
-                    <CardTitle className="text-base font-semibold flex items-center gap-2">
+                    <CardTitle className={`text-base font-semibold flex items-center gap-2 ${isDark ? "text-slate-100" : ""}`}>
                       <Activity className="h-4 w-4 text-emerald-500" />
                       Динамика ПСВ
                     </CardTitle>
@@ -756,21 +1031,22 @@ export function PeakFlowDiary() {
           {/* ===== HISTORY TAB ===== */}
           <TabsContent value="history">
             <div className="space-y-4 mt-4">
-              <Card>
+              <Card className={isDark ? "border-slate-700 bg-slate-800/50" : ""}>
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between">
-                    <CardTitle className="text-base font-semibold flex items-center gap-2">
+                    <CardTitle className={`text-base font-semibold flex items-center gap-2 ${isDark ? "text-slate-100" : ""}`}>
                       <Clock className="h-4 w-4" />
                       Последние записи
                     </CardTitle>
+                    {/* #9: Upload icon in history too */}
                     <Button size="sm" variant="outline" className="h-8 text-xs gap-1" onClick={exportCSV}>
-                      <Download className="h-3 w-3" /> CSV
+                      <Upload className="h-3 w-3" /> CSV
                     </Button>
                   </div>
                 </CardHeader>
                 <CardContent>
                   {historyList.length === 0 ? (
-                    <div className="text-center text-muted-foreground text-sm py-8">
+                    <div className={`text-center text-sm py-8 ${isDark ? "text-slate-500" : "text-muted-foreground"}`}>
                       <Wind className="h-8 w-8 mx-auto mb-2 text-slate-300" />
                       <p>Записей пока нет</p>
                       <p className="text-xs mt-1">Начните вводить данные пикфлоуметрии</p>
@@ -783,18 +1059,18 @@ export function PeakFlowDiary() {
                         return (
                           <div
                             key={m.id}
-                            className={`flex items-center gap-3 rounded-lg border p-3 transition-colors ${zoneBorderColor(zone)} bg-white`}
+                            className={`flex items-center gap-3 rounded-lg border p-3 transition-colors ${zoneBorderColor(zone)} ${isDark ? "bg-slate-800/80" : "bg-white"}`}
                           >
                             <div className={`h-2.5 w-2.5 rounded-full shrink-0 ${zoneColor(zone)}`} />
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 text-sm font-medium">
                                 <span className="text-lg font-bold">{m.value}</span>
-                                <span className="text-muted-foreground text-xs">л/мин</span>
+                                <span className={`text-xs ${isDark ? "text-slate-400" : "text-muted-foreground"}`}>л/мин</span>
                                 <Badge variant="secondary" className="text-xs px-1.5 py-0 ml-auto shrink-0">
                                   {zoneLabel(zone)}
                                 </Badge>
                               </div>
-                              <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5">
+                              <div className={`text-xs mt-0.5 flex items-center gap-1.5 ${isDark ? "text-slate-400" : "text-muted-foreground"}`}>
                                 {m.period === "morning" ? (
                                   <Sun className="h-3 w-3 text-amber-400" />
                                 ) : (
@@ -811,7 +1087,7 @@ export function PeakFlowDiary() {
                             <Button
                               variant="ghost"
                               size="icon"
-                              className="h-8 w-8 shrink-0 text-slate-400 hover:text-red-500"
+                              className={`h-8 w-8 shrink-0 ${isDark ? "text-slate-500 hover:text-red-400" : "text-slate-400 hover:text-red-500"}`}
                               onClick={() => deleteMeasurement(m.id)}
                             >
                               <Trash2 className="h-3.5 w-3.5" />
@@ -828,9 +1104,9 @@ export function PeakFlowDiary() {
         </Tabs>
       </main>
 
-      {/* Footer */}
-      <footer className="mt-auto border-t border-slate-200 bg-white/80 backdrop-blur-sm">
-        <div className="max-w-lg mx-auto px-4 py-3 text-center text-xs text-muted-foreground">
+      {/* Footer — #7: no Node.js badge; #8: correct name */}
+      <footer className={`mt-auto border-t backdrop-blur-sm ${isDark ? "border-slate-800 bg-slate-900/80" : "border-slate-200 bg-white/80"}`}>
+        <div className={`max-w-lg mx-auto px-4 py-3 text-center text-xs ${isDark ? "text-slate-500" : "text-muted-foreground"}`}>
           Все данные хранятся только на этом устройстве. Интернет не нужен.
         </div>
       </footer>

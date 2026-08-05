@@ -14,19 +14,25 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Пикфлоуметрия — Дневник ПСВ",
-  description: "Удобный дневник пикфлоуметрии для ежедневного контроля пиковой скорости выдоха.",
-  keywords: ["пикфлоуметрия", "ПСВ", "астма", "дневник", "здоровье"],
+  title: "Дневник пикфлоуметрии — Simple PFM Diary",
+  description: "Простой дневник пикфлоуметрии для ежедневного контроля пиковой скорости выдоха. PWA, работает офлайн.",
+  keywords: ["пикфлоуметрия", "ПСВ", "астма", "дневник", "здоровье", "peak flow", "PFM"],
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Пикфлоуметрия",
+    title: "Дневник ПФМ",
+  },
+  other: {
+    "mobile-web-app-capable": "yes",
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#059669",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#059669" },
+    { media: "(prefers-color-scheme: dark)", color: "#0f172a" },
+  ],
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
@@ -42,6 +48,7 @@ export default function RootLayout({
     <html lang="ru" suppressHydrationWarning>
       <head>
         <link rel="apple-touch-icon" href="/icon-192.png" />
+        <meta name="apple-mobile-web-app-title" content="Дневник ПФМ" />
         <script
           dangerouslySetInnerHTML={{
             __html: `
