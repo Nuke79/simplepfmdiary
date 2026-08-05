@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useRef } from "react";
 import {
   LineChart,
   Line,
@@ -57,9 +57,56 @@ interface Measurement {
   createdAt: string;
 }
 
-interface Settings {
-  id: string;
+interface AppSettings {
   personalBest: number;
+}
+
+/* ---------- local storage helpers ---------- */
+const STORAGE_KEYS = {
+  measurements: "peakflow_measurements",
+  settings: "peakflow_settings",
+  notifications: "peakflow_notifications",
+} as const;
+
+function loadMeasurements(): Measurement[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.measurements);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveMeasurements(data: Measurement[]) {
+  localStorage.setItem(STORAGE_KEYS.measurements, JSON.stringify(data));
+}
+
+function loadSettings(): AppSettings {
+  if (typeof window === "undefined") return { personalBest: 400 };
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.settings);
+    return raw ? JSON.parse(raw) : { personalBest: 400 };
+  } catch {
+    return { personalBest: 400 };
+  }
+}
+
+function saveSettings(data: AppSettings) {
+  localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(data));
+}
+
+function loadNotificationsPref(): boolean {
+  if (typeof window === "undefined") return false;
+  return localStorage.getItem(STORAGE_KEYS.notifications) === "true";
+}
+
+function saveNotificationsPref(val: boolean) {
+  localStorage.setItem(STORAGE_KEYS.notifications, JSON.stringify(val));
+}
+
+function generateId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
 /* ---------- zone helpers ---------- */
@@ -97,46 +144,36 @@ const chartConfig = {
 
 /* ---------- main component ---------- */
 export default function PeakFlowDiary() {
-  const [measurements, setMeasurements] = useState<Measurement[]>([]);
-  const [settings, setSettings] = useState<Settings>({ id: "singleton", personalBest: 400 });
+  const [measurements, setMeasurements] = useState<Measurement[]>(() => {
+    if (typeof window === "undefined") return [];
+    return loadMeasurements();
+  });
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    if (typeof window === "undefined") return { personalBest: 400 };
+    return loadSettings();
+  });
   const [inputValue, setInputValue] = useState("");
   const [period, setPeriod] = useState<"morning" | "evening">(() => {
+    if (typeof window === "undefined") return "morning";
     const hour = new Date().getHours();
     return hour >= 5 && hour < 15 ? "morning" : "evening";
   });
   const [timing, setTiming] = useState<"before" | "after">("before");
-  const [pbInput, setPbInput] = useState("");
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
-  const [reminderTimeout, setReminderTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [pbInput, setPbInput] = useState(() => {
+    if (typeof window === "undefined") return "400";
+    return String(loadSettings().personalBest);
+  });
+  const [notificationsEnabled, setNotificationsEnabled] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return loadNotificationsPref();
+  });
+  const [reminderTimeout, setReminderTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
   const [editingPB, setEditingPB] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const [chartDays, setChartDays] = useState(14);
 
-  /* --- fetch data --- */
-  useEffect(() => {
-    const controller = new AbortController();
-    const signal = controller.signal;
-
-    (async () => {
-      try {
-        const from = subDays(new Date(), chartDays).toISOString();
-        const mRes = await fetch(`/api/measurements?from=${from}`, { signal });
-        if (mRes.ok && !signal.aborted) setMeasurements(await mRes.json());
-
-        const sRes = await fetch("/api/settings", { signal });
-        if (sRes.ok && !signal.aborted) {
-          const s = await sRes.json();
-          setSettings(s);
-          setPbInput(String(s.personalBest));
-        }
-      } catch { /* aborted */ }
-    })();
-
-    return () => controller.abort();
-  }, [chartDays]);
-
   /* --- add measurement --- */
-  const addMeasurement = async () => {
+  const addMeasurement = () => {
     const val = parseInt(inputValue);
     if (isNaN(val) || val < 50 || val > 900) {
       toast.error("Введите корректное значение ПСВ (50-900 л/мин)");
@@ -144,71 +181,64 @@ export default function PeakFlowDiary() {
     }
 
     const now = new Date();
-    await fetch("/api/measurements", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        value: val,
-        period,
-        timing,
-        date: now.toISOString(),
-      }),
-    });
+    const newM: Measurement = {
+      id: generateId(),
+      value: val,
+      period,
+      timing,
+      date: now.toISOString(),
+      createdAt: now.toISOString(),
+    };
+
+    const updated = [...measurements, newM];
+    setMeasurements(updated);
+    saveMeasurements(updated);
 
     setInputValue("");
 
-    // If this is a "before" measurement, schedule a 30-min reminder
+    // If this is a "before" measurement, switch to "after" and schedule reminder
     if (timing === "before") {
       setTiming("after");
       scheduleReminder();
     } else {
-      // After inhaler measurement done, keep timing as "before" for next session
       setTiming("before");
     }
 
     toast.success(`Записано: ${val} л/мин (${period === "morning" ? "утро" : "вечер"}, ${timing === "before" ? "до" : "после"} ингаляции)`);
-    // Refetch measurements
-    const from = subDays(new Date(), chartDays).toISOString();
-    const mRes = await fetch(`/api/measurements?from=${from}`);
-    if (mRes.ok) setMeasurements(await mRes.json());
     inputRef.current?.focus();
   };
 
   /* --- delete measurement --- */
-  const deleteMeasurement = async (id: string) => {
-    await fetch(`/api/measurements?id=${id}`, { method: "DELETE" });
-    const from = subDays(new Date(), chartDays).toISOString();
-    const mRes = await fetch(`/api/measurements?from=${from}`);
-    if (mRes.ok) setMeasurements(await mRes.json());
+  const deleteMeasurement = (id: string) => {
+    const updated = measurements.filter((m) => m.id !== id);
+    setMeasurements(updated);
+    saveMeasurements(updated);
     toast.success("Запись удалена");
   };
 
   /* --- update personal best --- */
-  const savePB = async () => {
+  const savePB = () => {
     const val = parseInt(pbInput);
     if (isNaN(val) || val < 50 || val > 900) {
       toast.error("Введите корректное значение (50-900)");
       return;
     }
-    await fetch("/api/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ personalBest: val }),
-    });
-    setSettings({ ...settings, personalBest: val });
+    const updated = { ...settings, personalBest: val };
+    setSettings(updated);
+    saveSettings(updated);
     setEditingPB(false);
     toast.success(`Персональный лучший результат: ${val} л/мин`);
   };
 
   /* --- notifications --- */
   const scheduleReminder = () => {
-    if (!notificationsEnabled) return;
+    const notifPref = loadNotificationsPref();
+    if (!notifPref) return;
     if (reminderTimeout) clearTimeout(reminderTimeout);
     const timeout = setTimeout(() => {
       if (Notification.permission === "granted") {
         new Notification("Пикфлоуметрия", {
           body: "Прошло 30 минут — время сделать замер после ингаляции!",
-          icon: "/logo.svg",
           tag: "peakflow-reminder",
         });
       }
@@ -225,24 +255,70 @@ export default function PeakFlowDiary() {
         const perm = await Notification.requestPermission();
         if (perm === "granted") {
           setNotificationsEnabled(true);
+          saveNotificationsPref(true);
           toast.success("Уведомления включены");
         } else {
-          toast.error("Разрешите уведомления в браузере");
+          toast.error("Разрешите уведомления в настройках браузера");
         }
       } else {
         toast.error("Уведомления не поддерживаются в этом браузере");
       }
     } else {
       setNotificationsEnabled(false);
+      saveNotificationsPref(false);
       if (reminderTimeout) clearTimeout(reminderTimeout);
       toast.success("Уведомления выключены");
     }
   };
 
-  /* --- CSV export --- */
+  /* --- CSV export (fully client-side) --- */
   const exportCSV = () => {
-    const from = subDays(new Date(), chartDays).toISOString();
-    window.open(`/api/export?from=${from}`, "_blank");
+    const sorted = [...measurements].sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
+
+    const pb = settings.personalBest;
+    const greenMin = Math.round(pb * 0.8);
+    const yellowMin = Math.round(pb * 0.5);
+
+    const bom = "\uFEFF";
+    const header = "Дата;Время;Период;Тип;ПСВ (л/мин);Зона\n";
+
+    const rows = sorted
+      .map((m) => {
+        const d = new Date(m.date);
+        const dateStr = d.toLocaleDateString("ru-RU", {
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+        });
+        const timeStr = d.toLocaleTimeString("ru-RU", {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        const periodStr = m.period === "morning" ? "Утро" : "Вечер";
+        const timingStr =
+          m.timing === "before" ? "До ингаляции" : "После ингаляции";
+        const zone =
+          m.value >= greenMin
+            ? "Зелёная"
+            : m.value >= yellowMin
+              ? "Жёлтая"
+              : "Красная";
+        return `${dateStr};${timeStr};${periodStr};${timingStr};${m.value};${zone}`;
+      })
+      .join("\n");
+
+    const csv = bom + header + rows;
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `peakflow_${format(new Date(), "yyyy-MM-dd")}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
     toast.success("CSV-файл загружен");
   };
 
@@ -251,22 +327,24 @@ export default function PeakFlowDiary() {
     const days = Array.from({ length: chartDays }, (_, i) => {
       const d = startOfDay(subDays(new Date(), chartDays - 1 - i));
       const dayStr = format(d, "yyyy-MM-dd");
-      const dayMs = [
-        { key: "morningBefore", period: "morning", timing: "before" },
-        { key: "morningAfter", period: "morning", timing: "after" },
-        { key: "eveningBefore", period: "evening", timing: "before" },
-        { key: "eveningAfter", period: "evening", timing: "after" },
-      ] as const;
+      const keys = [
+        { key: "morningBefore", period: "morning" as const, timing: "before" as const },
+        { key: "morningAfter", period: "morning" as const, timing: "after" as const },
+        { key: "eveningBefore", period: "evening" as const, timing: "before" as const },
+        { key: "eveningAfter", period: "evening" as const, timing: "after" as const },
+      ];
 
-      const point: Record<string, string | number> = { date: format(d, "dd.MM", { locale: ru }) };
-      for (const { key, period: p, timing: t } of dayMs) {
+      const point: Record<string, string | number> = {
+        date: format(d, "dd.MM", { locale: ru }),
+      };
+      for (const { key, period: p, timing: t } of keys) {
         const m = measurements.find(
           (m) =>
             format(new Date(m.date), "yyyy-MM-dd") === dayStr &&
             m.period === p &&
             m.timing === t
         );
-        point[key] = m ? m.value : undefined as unknown as number;
+        point[key] = m ? m.value : (undefined as unknown as number);
       }
       return point;
     });
@@ -309,7 +387,11 @@ export default function PeakFlowDiary() {
               size="icon"
               onClick={toggleNotifications}
               className="h-9 w-9"
-              title={notificationsEnabled ? "Выключить уведомления" : "Включить уведомления"}
+              title={
+                notificationsEnabled
+                  ? "Выключить уведомления"
+                  : "Включить уведомления"
+              }
             >
               {notificationsEnabled ? (
                 <Bell className="h-4 w-4 text-emerald-600" />
@@ -375,10 +457,16 @@ export default function PeakFlowDiary() {
                           todayDone(p, t)
                             ? "bg-emerald-50 border-emerald-200 text-emerald-700"
                             : "bg-slate-50 border-slate-200 text-slate-500"
-                        } ${period === p && timing === t ? "ring-2 ring-emerald-500 ring-offset-1" : ""}`}
+                        } ${
+                          period === p && timing === t
+                            ? "ring-2 ring-emerald-500 ring-offset-1"
+                            : ""
+                        }`}
                       >
                         <Icon className="h-4 w-4 shrink-0" />
-                        <span className="text-xs font-medium leading-tight">{label}</span>
+                        <span className="text-xs font-medium leading-tight">
+                          {label}
+                        </span>
                         {todayDone(p, t) && (
                           <Check className="h-3.5 w-3.5 text-emerald-500 ml-auto shrink-0" />
                         )}
@@ -391,7 +479,9 @@ export default function PeakFlowDiary() {
               {/* Input card */}
               <Card className="border-2 border-emerald-200">
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-base font-semibold">Новый замер</CardTitle>
+                  <CardTitle className="text-base font-semibold">
+                    Новый замер
+                  </CardTitle>
                   <CardDescription>
                     {period === "morning" ? (
                       <span className="flex items-center gap-1">
@@ -403,7 +493,9 @@ export default function PeakFlowDiary() {
                       </span>
                     )}
                     {" — "}
-                    {timing === "before" ? "до ингаляции" : "через 30 мин после ингаляции"}
+                    {timing === "before"
+                      ? "до ингаляции"
+                      : "через 30 мин после ингаляции"}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -484,16 +576,25 @@ export default function PeakFlowDiary() {
                       className={`flex items-center justify-center gap-2 rounded-lg p-3 border-l-4 ${zoneBorderColor(
                         getZone(parseInt(inputValue), settings.personalBest)
                       )} ${
-                        getZone(parseInt(inputValue), settings.personalBest) === "green"
+                        getZone(parseInt(inputValue), settings.personalBest) ===
+                        "green"
                           ? "bg-emerald-50"
-                          : getZone(parseInt(inputValue), settings.personalBest) === "yellow"
-                          ? "bg-amber-50"
-                          : "bg-red-50"
+                          : getZone(parseInt(inputValue), settings.personalBest) ===
+                              "yellow"
+                            ? "bg-amber-50"
+                            : "bg-red-50"
                       }`}
                     >
-                      <div className={`h-3 w-3 rounded-full ${zoneColor(getZone(parseInt(inputValue), settings.personalBest))}`} />
+                      <div
+                        className={`h-3 w-3 rounded-full ${zoneColor(
+                          getZone(parseInt(inputValue), settings.personalBest)
+                        )}`}
+                      />
                       <span className="text-sm font-medium">
-                        {zoneLabel(getZone(parseInt(inputValue), settings.personalBest))} зона
+                        {zoneLabel(
+                          getZone(parseInt(inputValue), settings.personalBest)
+                        )}{" "}
+                        зона
                       </span>
                       <span className="text-xs text-muted-foreground ml-1">
                         ({parseInt(inputValue)} / {settings.personalBest})
@@ -570,7 +671,10 @@ export default function PeakFlowDiary() {
                         onClick={() => setEditingPB(true)}
                         className="text-sm text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
                       >
-                        Персональный лучший: <strong className="text-foreground">{settings.personalBest} л/мин</strong>
+                        Персональный лучший:{" "}
+                        <strong className="text-foreground">
+                          {settings.personalBest} л/мин
+                        </strong>
                         <span className="text-xs">(нажмите чтобы изменить)</span>
                       </button>
                     )}
@@ -748,7 +852,12 @@ export default function PeakFlowDiary() {
                       <Clock className="h-4 w-4" />
                       Последние записи
                     </CardTitle>
-                    <Button size="sm" variant="outline" className="h-8 text-xs gap-1" onClick={exportCSV}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 text-xs gap-1"
+                      onClick={exportCSV}
+                    >
                       <Download className="h-3 w-3" /> CSV
                     </Button>
                   </div>
@@ -758,7 +867,9 @@ export default function PeakFlowDiary() {
                     <div className="text-center text-muted-foreground text-sm py-8">
                       <Wind className="h-8 w-8 mx-auto mb-2 text-slate-300" />
                       <p>Записей пока нет</p>
-                      <p className="text-xs mt-1">Начните вводить данные пикфлоуметрии</p>
+                      <p className="text-xs mt-1">
+                        Начните вводить данные пикфлоуметрии
+                      </p>
                     </div>
                   ) : (
                     <div className="space-y-2 max-h-[500px] overflow-y-auto">
@@ -770,12 +881,21 @@ export default function PeakFlowDiary() {
                             key={m.id}
                             className={`flex items-center gap-3 rounded-lg border p-3 transition-colors ${zoneBorderColor(zone)} bg-white`}
                           >
-                            <div className={`h-2.5 w-2.5 rounded-full shrink-0 ${zoneColor(zone)}`} />
+                            <div
+                              className={`h-2.5 w-2.5 rounded-full shrink-0 ${zoneColor(zone)}`}
+                            />
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 text-sm font-medium">
-                                <span className="text-lg font-bold">{m.value}</span>
-                                <span className="text-muted-foreground text-xs">л/мин</span>
-                                <Badge variant="secondary" className="text-xs px-1.5 py-0 ml-auto shrink-0">
+                                <span className="text-lg font-bold">
+                                  {m.value}
+                                </span>
+                                <span className="text-muted-foreground text-xs">
+                                  л/мин
+                                </span>
+                                <Badge
+                                  variant="secondary"
+                                  className="text-xs px-1.5 py-0 ml-auto shrink-0"
+                                >
                                   {zoneLabel(zone)}
                                 </Badge>
                               </div>
@@ -787,10 +907,13 @@ export default function PeakFlowDiary() {
                                 )}
                                 <span>
                                   {m.period === "morning" ? "Утро" : "Вечер"},{" "}
-                                  {m.timing === "before" ? "до" : "после"} ингаляции
+                                  {m.timing === "before" ? "до" : "после"}{" "}
+                                  ингаляции
                                 </span>
                                 <span className="text-slate-300">|</span>
-                                <span>{format(d, "dd.MM.yy, HH:mm", { locale: ru })}</span>
+                                <span>
+                                  {format(d, "dd.MM.yy, HH:mm", { locale: ru })}
+                                </span>
                               </div>
                             </div>
                             <Button
@@ -816,7 +939,7 @@ export default function PeakFlowDiary() {
       {/* Footer */}
       <footer className="mt-auto border-t border-slate-200 bg-white/80 backdrop-blur-sm">
         <div className="max-w-lg mx-auto px-4 py-3 text-center text-xs text-muted-foreground">
-          Пикфлоуметрия — ежедневный дневник ПСВ. Данные хранятся локально.
+          Все данные хранятся только на этом устройстве. Интернет не нужен.
         </div>
       </footer>
     </div>

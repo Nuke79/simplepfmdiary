@@ -1,20 +1,21 @@
 ---
-Task ID: 1
+Task ID: 2
 Agent: Super Z (main)
-Task: Create a peak flow meter diary web application
+Task: Refactor to local storage + PWA for offline support
 
 Work Log:
-- Set up Prisma schema with Settings (personalBest) and Measurement (value, period, timing, date) models
-- Pushed schema to SQLite database and seeded default settings
-- Created API routes: GET/POST/DELETE /api/measurements, GET/PUT /api/settings, GET /api/export (CSV)
-- Built full mobile-optimized UI with 3 tabs: Input, Chart, History
-- Implemented zone system (green/yellow/red) based on 80%/50% of personal best
-- Added notification system with 30-minute reminder after "before inhaler" measurement
-- Added CSV export with BOM for Excel compatibility
-- Fixed lint errors (removed synchronous setState in effects, removed unused imports)
-- Verified in browser: all tabs work, measurement recording works, no errors
+- Rewrote page.tsx to use localStorage instead of API/Prisma
+- All data (measurements, settings, notification prefs) stored in localStorage
+- Lazy state initializers to avoid setState-in-effect lint errors
+- CSV export fully client-side using Blob + download link
+- Created manifest.json for PWA installability
+- Created sw.js service worker with network-first for navigation, cache-first for static assets
+- Generated PWA icons (192x192, 512x512) using sharp + SVG
+- Updated layout.tsx with manifest link, viewport meta, service worker registration, apple-touch-icon
+- Verified: data persists in localStorage, all tabs work, no console errors
 
 Stage Summary:
-- Delivered: Mobile-first peak flow diary web app at / route
-- Features: 4 daily measurements (morning/evening × before/after inhaler), 3-zone system, recharts line graph, CSV export, notification reminders
-- Tech: Next.js 16, Prisma/SQLite, shadcn/ui, recharts, Tailwind CSS
+- App now works entirely offline after first load
+- All data stays on device — zero server dependency
+- PWA-ready: installable on home screen, works without browser chrome
+- Footer text updated: "Все данные хранятся только на этом устройстве. Интернет не нужен."
