@@ -773,7 +773,15 @@ export function PeakFlowDiary() {
                       <CalendarDays className="h-4 w-4 text-emerald-500 shrink-0" />
                       <span className={`text-xs font-medium ${isDark ? "text-slate-300" : "text-muted-foreground"}`}>Дата и время замера</span>
                       {isToday(parseISO(selectedDate)) ? (
-                        <Badge variant="secondary" className="text-xs px-1.5 py-0 ml-auto">Сейчас</Badge>
+                        <button
+                          onClick={() => {
+                            const now = new Date();
+                            setSelectedTime(`${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`);
+                          }}
+                          className="ml-auto"
+                        >
+                          <Badge variant="secondary" className="text-xs px-1.5 py-0 cursor-pointer hover:bg-emerald-100 transition-colors">Сейчас</Badge>
+                        </button>
                       ) : (
                         <button
                           onClick={() => {
