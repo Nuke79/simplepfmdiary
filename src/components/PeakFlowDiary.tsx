@@ -351,9 +351,10 @@ export function PeakFlowDiary() {
 
   /* --- notifications (#3: configurable delay) --- */
   const scheduleReminder = () => {
-    if (!loadNotificationsPref()) return;
     if (reminderTimeout) clearTimeout(reminderTimeout);
     const delay = settings.reminderMinutes * 60 * 1000;
+    // Store the target time so we can check on visibility change
+    const targetTime = Date.now() + delay;
     const timeout = setTimeout(() => {
       if (Notification.permission === "granted") {
         new Notification("Дневник пикфлоуметрии", {
