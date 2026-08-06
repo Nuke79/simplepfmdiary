@@ -184,6 +184,9 @@ export function PeakFlowDiary() {
   const [reminderMinInput, setReminderMinInput] = useState(() => String(loadSettings().reminderMinutes));
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => loadNotificationsPref());
   const [reminderTimeout, setReminderTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
+  const reminderTargetRef = useRef<number | null>(null); // timestamp when reminder should fire
+  const reminderFiredRef = useRef(false);
+  const fireReminderRef = useRef<() => void>(() => {}); // stable ref to fireReminder
   const [editingPB, setEditingPB] = useState(false);
   const [editingReminder, setEditingReminder] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -246,6 +249,20 @@ export function PeakFlowDiary() {
     };
     window.addEventListener("sw-update-available", handler);
     return () => window.removeEventListener("sw-update-available", handler);
+  }, []);
+
+  // Check for missed reminder when user returns to the app
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const handler = () => {
+      if (document.visibilityState === "visible" && reminderTargetRef.current && !reminderFiredRef.current) {
+        if (Date.now() >= reminderTargetRef.current) {
+          fireReminderRef.current();
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", handler);
+    return () => document.removeEventListener("visibilitychange", handler);
   }, []);
 
   /* --- add measurement (#1: with custom date/time) --- */
@@ -349,23 +366,15 @@ export function PeakFlowDiary() {
     saveSettings(updated);
   };
 
-  /* --- notifications (#3: configurable delay) --- */
+  /* --- notifications (#3: configurable delay) --- */\n  const fireReminder = () => {\n    if (Notification.permission === \"granted\") {\n      new Notification(\"Дневник пикфлоуметрии\", {\n        body: `Прошло ${settings.reminderMinutes} мин. — время сделать замер после ингаляции!`,\n        tag: \"peakflow-reminder\",\n      });\n    }\n    toast.info(`Прошло ${settings.reminderMinutes} мин. — время сделать замер после ингаляции!`, {\n      duration: 10000,\n    });\n    reminderFiredRef.current = true;\n    reminderTargetRef.current = null;\n  };\n\n  // Keep ref in sync with latest fireReminder\n  fireReminderRef.current = fireReminder;
+
   const scheduleReminder = () => {
     if (reminderTimeout) clearTimeout(reminderTimeout);
     const delay = settings.reminderMinutes * 60 * 1000;
-    // Store the target time so we can check on visibility change
     const targetTime = Date.now() + delay;
-    const timeout = setTimeout(() => {
-      if (Notification.permission === "granted") {
-        new Notification("Дневник пикфлоуметрии", {
-          body: `Прошло ${settings.reminderMinutes} мин. — время сделать замер после ингаляции!`,
-          tag: "peakflow-reminder",
-        });
-      }
-      toast.info(`Прошло ${settings.reminderMinutes} мин. — время сделать замер после ингаляции!`, {
-        duration: 10000,
-      });
-    }, delay);
+    reminderTargetRef.current = targetTime;
+    reminderFiredRef.current = false;
+    const timeout = setTimeout(fireReminder, delay);
     setReminderTimeout(timeout);
   };
 
