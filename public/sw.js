@@ -1,4 +1,4 @@
-const CACHE_NAME = "peakflow-v5";
+const CACHE_NAME = "peakflow-v6";
 const BASE = "/simplepfmdiary";
 const STATIC_ASSETS = [
   BASE + "/",
@@ -6,6 +6,8 @@ const STATIC_ASSETS = [
   BASE + "/icon-192.png",
   BASE + "/icon-512.png",
 ];
+
+let reminderTimer = null;
 
 /* Install: cache core assets, activate immediately to replace old SW */
 self.addEventListener("install", (event) => {
@@ -25,6 +27,61 @@ self.addEventListener("activate", (event) => {
     )
   );
   self.clients.claim();
+});
+
+/* Message handler: schedule/cancel reminders and notify about updates */
+self.addEventListener("message", (event) => {
+  const { type, delay, title, body, tag } = event.data || {};
+
+  if (type === "SCHEDULE_REMINDER") {
+    // Clear any existing reminder
+    if (reminderTimer) clearTimeout(reminderTimer);
+
+    // Schedule notification via SW (works when page is in background)
+    reminderTimer = setTimeout(() => {
+      self.registration.showNotification(title || "Дневник ПФМ", {
+        body: body || "Время сделать замер!",
+        icon: BASE + "/icon-192.png",
+        badge: BASE + "/icon-192.png",
+        tag: tag || "peakflow-reminder",
+        vibrate: [200, 100, 200],
+        requireInteraction: true,
+      });
+      // Notify the page to show a toast too
+      self.clients.matchAll().then((clients) => {
+        clients.forEach((client) => {
+          client.postMessage({ type: "REMINDER_FIRED" });
+        });
+      });
+      reminderTimer = null;
+    }, delay || 30 * 60 * 1000);
+
+    // Respond to confirm scheduling
+    if (event.ports && event.ports[0]) {
+      event.ports[0].postMessage({ scheduled: true, delay: delay });
+    }
+  }
+
+  if (type === "CANCEL_REMINDER") {
+    if (reminderTimer) {
+      clearTimeout(reminderTimer);
+      reminderTimer = null;
+    }
+  }
+});
+
+/* Handle notification click — open the app */
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: "window" }).then((clients) => {
+      // Focus existing window or open new
+      for (const client of clients) {
+        if ("focus" in client) return client.focus();
+      }
+      return self.clients.openWindow(BASE + "/");
+    })
+  );
 });
 
 /* Fetch: network-first for navigation, cache-first for assets */

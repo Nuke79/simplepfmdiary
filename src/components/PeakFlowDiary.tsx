@@ -251,6 +251,18 @@ export function PeakFlowDiary() {
     return () => window.removeEventListener("sw-update-available", handler);
   }, []);
 
+  // Listen for REMINDER_FIRED from Service Worker
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    const handler = (event: MessageEvent) => {
+      if (event.data?.type === "REMINDER_FIRED") {
+        fireReminderRef.current();
+      }
+    };
+    navigator.serviceWorker.addEventListener("message", handler);
+    return () => navigator.serviceWorker.removeEventListener("message", handler);
+  }, []);
+
   // Check for missed reminder when user returns to the app
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -366,8 +378,17 @@ export function PeakFlowDiary() {
     saveSettings(updated);
   };
 
-  /* --- notifications (#3: configurable delay) --- */\n  const fireReminder = () => {\n    if (Notification.permission === \"granted\") {\n      new Notification(\"Дневник пикфлоуметрии\", {\n        body: `Прошло ${settings.reminderMinutes} мин. — время сделать замер после ингаляции!`,\n        tag: \"peakflow-reminder\",\n      });\n    }\n    toast.info(`Прошло ${settings.reminderMinutes} мин. — время сделать замер после ингаляции!`, {\n      duration: 10000,\n    });\n    reminderFiredRef.current = true;\n    reminderTargetRef.current = null;\n  };\n\n  // Keep ref in sync with latest fireReminder\n  fireReminderRef.current = fireReminder;
+  /* --- notifications (#3: configurable delay via Service Worker) --- */
+  const fireReminder = () => {
+    toast.info(`Прошло ${settings.reminderMinutes} мин. — время сделать замер после ингаляции!`, {
+      duration: 10000,
+    });
+    reminderFiredRef.current = true;
+    reminderTargetRef.current = null;
+  };
 
+  // Keep ref in sync with latest fireReminder
+  fireReminderRef.current = fireReminder;
   const scheduleReminder = () => {
     if (reminderTimeout) clearTimeout(reminderTimeout);
     const delay = settings.reminderMinutes * 60 * 1000;
@@ -376,6 +397,17 @@ export function PeakFlowDiary() {
     reminderFiredRef.current = false;
     const timeout = setTimeout(fireReminder, delay);
     setReminderTimeout(timeout);
+
+    // Also schedule via Service Worker (works when page is hidden/backgrounded)
+    if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({
+        type: "SCHEDULE_REMINDER",
+        delay,
+        title: "Дневник пикфлоуметрии",
+        body: `Прошло ${settings.reminderMinutes} мин. — время сделать замер после ингаляции!`,
+        tag: "peakflow-reminder",
+      });
+    }
   };
 
   const toggleNotifications = async () => {
@@ -396,6 +428,10 @@ export function PeakFlowDiary() {
       setNotificationsEnabled(false);
       saveNotificationsPref(false);
       if (reminderTimeout) clearTimeout(reminderTimeout);
+      // Cancel SW reminder too
+      if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: "CANCEL_REMINDER" });
+      }
       toast.success("Уведомления выключены");
     }
   };
